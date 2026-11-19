@@ -364,12 +364,14 @@ func (x *Hello) GetUdpPort() uint32 {
 	return 0
 }
 
+// udp_port é a porta de eventos do broker, no mesmo host da conexão TCP.
 type HelloReply struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Status              Status                 `protobuf:"varint,1,opt,name=status,proto3,enum=pubsub.control.v1.Status" json:"status,omitempty"`
 	Detail              string                 `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
 	BrokerId            string                 `protobuf:"bytes,3,opt,name=broker_id,json=brokerId,proto3" json:"broker_id,omitempty"`
 	HeartbeatIntervalMs uint32                 `protobuf:"varint,4,opt,name=heartbeat_interval_ms,json=heartbeatIntervalMs,proto3" json:"heartbeat_interval_ms,omitempty"`
+	UdpPort             uint32                 `protobuf:"varint,5,opt,name=udp_port,json=udpPort,proto3" json:"udp_port,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -428,6 +430,13 @@ func (x *HelloReply) GetBrokerId() string {
 func (x *HelloReply) GetHeartbeatIntervalMs() uint32 {
 	if x != nil {
 		return x.HeartbeatIntervalMs
+	}
+	return 0
+}
+
+func (x *HelloReply) GetUdpPort() uint32 {
+	if x != nil {
+		return x.UdpPort
 	}
 	return 0
 }
@@ -1169,6 +1178,60 @@ func (x *PublishResult) GetStatus() AdmissionStatus {
 	return AdmissionStatus_ADMISSION_UNSPECIFIED
 }
 
+// Enviado pelo broker sem pedido correspondente quando uma inscrição deixa
+// de existir por motivo alheio ao cliente, como a exclusão do tópico.
+type SubscriptionEnded struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Topic         *TopicInfo             `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
+	Reason        Status                 `protobuf:"varint,2,opt,name=reason,proto3,enum=pubsub.control.v1.Status" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubscriptionEnded) Reset() {
+	*x = SubscriptionEnded{}
+	mi := &file_control_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubscriptionEnded) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubscriptionEnded) ProtoMessage() {}
+
+func (x *SubscriptionEnded) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubscriptionEnded.ProtoReflect.Descriptor instead.
+func (*SubscriptionEnded) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SubscriptionEnded) GetTopic() *TopicInfo {
+	if x != nil {
+		return x.Topic
+	}
+	return nil
+}
+
+func (x *SubscriptionEnded) GetReason() Status {
+	if x != nil {
+		return x.Reason
+	}
+	return Status_STATUS_UNSPECIFIED
+}
+
 // Enviado nos dois sentidos para detectar perda do canal de controle.
 type Heartbeat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1179,7 +1242,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_control_proto_msgTypes[16]
+	mi := &file_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1191,7 +1254,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[16]
+	mi := &file_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1204,7 +1267,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{16}
+	return file_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Heartbeat) GetNonce() uint64 {
@@ -1237,6 +1300,7 @@ type Envelope struct {
 	//	*Envelope_GetStatsReply
 	//	*Envelope_PublishResult
 	//	*Envelope_Heartbeat
+	//	*Envelope_SubscriptionEnded
 	Body          isEnvelope_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1244,7 +1308,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_control_proto_msgTypes[17]
+	mi := &file_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1256,7 +1320,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_control_proto_msgTypes[17]
+	mi := &file_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1269,7 +1333,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_control_proto_rawDescGZIP(), []int{17}
+	return file_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Envelope) GetRequestId() uint64 {
@@ -1430,6 +1494,15 @@ func (x *Envelope) GetHeartbeat() *Heartbeat {
 	return nil
 }
 
+func (x *Envelope) GetSubscriptionEnded() *SubscriptionEnded {
+	if x != nil {
+		if x, ok := x.Body.(*Envelope_SubscriptionEnded); ok {
+			return x.SubscriptionEnded
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Body interface {
 	isEnvelope_Body()
 }
@@ -1498,6 +1571,10 @@ type Envelope_Heartbeat struct {
 	Heartbeat *Heartbeat `protobuf:"bytes,25,opt,name=heartbeat,proto3,oneof"`
 }
 
+type Envelope_SubscriptionEnded struct {
+	SubscriptionEnded *SubscriptionEnded `protobuf:"bytes,26,opt,name=subscription_ended,json=subscriptionEnded,proto3,oneof"`
+}
+
 func (*Envelope_Hello) isEnvelope_Body() {}
 
 func (*Envelope_HelloReply) isEnvelope_Body() {}
@@ -1530,6 +1607,8 @@ func (*Envelope_PublishResult) isEnvelope_Body() {}
 
 func (*Envelope_Heartbeat) isEnvelope_Body() {}
 
+func (*Envelope_SubscriptionEnded) isEnvelope_Body() {}
+
 var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
@@ -1549,13 +1628,14 @@ const file_control_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x02 \x01(\x04R\tsessionId\x12\x14\n" +
 	"\x05token\x18\x03 \x01(\tR\x05token\x12\x19\n" +
-	"\budp_port\x18\x04 \x01(\rR\audpPort\"\xa8\x01\n" +
+	"\budp_port\x18\x04 \x01(\rR\audpPort\"\xc3\x01\n" +
 	"\n" +
 	"HelloReply\x121\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x19.pubsub.control.v1.StatusR\x06status\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\x12\x1b\n" +
 	"\tbroker_id\x18\x03 \x01(\tR\bbrokerId\x122\n" +
-	"\x15heartbeat_interval_ms\x18\x04 \x01(\rR\x13heartbeatIntervalMs\"q\n" +
+	"\x15heartbeat_interval_ms\x18\x04 \x01(\rR\x13heartbeatIntervalMs\x12\x19\n" +
+	"\budp_port\x18\x05 \x01(\rR\audpPort\"q\n" +
 	"\vCreateTopic\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x120\n" +
 	"\x04kind\x18\x02 \x01(\x0e2\x1c.pubsub.control.v1.TopicKindR\x04kind\x12\x1c\n" +
@@ -1615,9 +1695,12 @@ const file_control_proto_rawDesc = "" +
 	"generation\x18\x02 \x01(\rR\n" +
 	"generation\x12\x1a\n" +
 	"\bsequence\x18\x03 \x01(\x04R\bsequence\x12:\n" +
-	"\x06status\x18\x04 \x01(\x0e2\".pubsub.control.v1.AdmissionStatusR\x06status\"!\n" +
+	"\x06status\x18\x04 \x01(\x0e2\".pubsub.control.v1.AdmissionStatusR\x06status\"z\n" +
+	"\x11SubscriptionEnded\x122\n" +
+	"\x05topic\x18\x01 \x01(\v2\x1c.pubsub.control.v1.TopicInfoR\x05topic\x121\n" +
+	"\x06reason\x18\x02 \x01(\x0e2\x19.pubsub.control.v1.StatusR\x06reason\"!\n" +
 	"\tHeartbeat\x12\x14\n" +
-	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\"\xa8\t\n" +
+	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\"\xff\t\n" +
 	"\bEnvelope\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\x120\n" +
@@ -1638,7 +1721,8 @@ const file_control_proto_rawDesc = "" +
 	"\tget_stats\x18\x16 \x01(\v2\x1b.pubsub.control.v1.GetStatsH\x00R\bgetStats\x12J\n" +
 	"\x0fget_stats_reply\x18\x17 \x01(\v2 .pubsub.control.v1.GetStatsReplyH\x00R\rgetStatsReply\x12I\n" +
 	"\x0epublish_result\x18\x18 \x01(\v2 .pubsub.control.v1.PublishResultH\x00R\rpublishResult\x12<\n" +
-	"\theartbeat\x18\x19 \x01(\v2\x1c.pubsub.control.v1.HeartbeatH\x00R\theartbeatB\x06\n" +
+	"\theartbeat\x18\x19 \x01(\v2\x1c.pubsub.control.v1.HeartbeatH\x00R\theartbeat\x12U\n" +
+	"\x12subscription_ended\x18\x1a \x01(\v2$.pubsub.control.v1.SubscriptionEndedH\x00R\x11subscriptionEndedB\x06\n" +
 	"\x04body*W\n" +
 	"\tTopicKind\x12\x1a\n" +
 	"\x16TOPIC_KIND_UNSPECIFIED\x10\x00\x12\x18\n" +
@@ -1682,31 +1766,32 @@ func file_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_control_proto_goTypes = []any{
-	(TopicKind)(0),           // 0: pubsub.control.v1.TopicKind
-	(Status)(0),              // 1: pubsub.control.v1.Status
-	(AdmissionStatus)(0),     // 2: pubsub.control.v1.AdmissionStatus
-	(*TopicInfo)(nil),        // 3: pubsub.control.v1.TopicInfo
-	(*Hello)(nil),            // 4: pubsub.control.v1.Hello
-	(*HelloReply)(nil),       // 5: pubsub.control.v1.HelloReply
-	(*CreateTopic)(nil),      // 6: pubsub.control.v1.CreateTopic
-	(*CreateTopicReply)(nil), // 7: pubsub.control.v1.CreateTopicReply
-	(*DeleteTopic)(nil),      // 8: pubsub.control.v1.DeleteTopic
-	(*DeleteTopicReply)(nil), // 9: pubsub.control.v1.DeleteTopicReply
-	(*LookupTopic)(nil),      // 10: pubsub.control.v1.LookupTopic
-	(*LookupTopicReply)(nil), // 11: pubsub.control.v1.LookupTopicReply
-	(*Subscribe)(nil),        // 12: pubsub.control.v1.Subscribe
-	(*SubscribeReply)(nil),   // 13: pubsub.control.v1.SubscribeReply
-	(*Unsubscribe)(nil),      // 14: pubsub.control.v1.Unsubscribe
-	(*UnsubscribeReply)(nil), // 15: pubsub.control.v1.UnsubscribeReply
-	(*GetStats)(nil),         // 16: pubsub.control.v1.GetStats
-	(*GetStatsReply)(nil),    // 17: pubsub.control.v1.GetStatsReply
-	(*PublishResult)(nil),    // 18: pubsub.control.v1.PublishResult
-	(*Heartbeat)(nil),        // 19: pubsub.control.v1.Heartbeat
-	(*Envelope)(nil),         // 20: pubsub.control.v1.Envelope
-	nil,                      // 21: pubsub.control.v1.GetStatsReply.CountersEntry
-	nil,                      // 22: pubsub.control.v1.GetStatsReply.GaugesEntry
+	(TopicKind)(0),            // 0: pubsub.control.v1.TopicKind
+	(Status)(0),               // 1: pubsub.control.v1.Status
+	(AdmissionStatus)(0),      // 2: pubsub.control.v1.AdmissionStatus
+	(*TopicInfo)(nil),         // 3: pubsub.control.v1.TopicInfo
+	(*Hello)(nil),             // 4: pubsub.control.v1.Hello
+	(*HelloReply)(nil),        // 5: pubsub.control.v1.HelloReply
+	(*CreateTopic)(nil),       // 6: pubsub.control.v1.CreateTopic
+	(*CreateTopicReply)(nil),  // 7: pubsub.control.v1.CreateTopicReply
+	(*DeleteTopic)(nil),       // 8: pubsub.control.v1.DeleteTopic
+	(*DeleteTopicReply)(nil),  // 9: pubsub.control.v1.DeleteTopicReply
+	(*LookupTopic)(nil),       // 10: pubsub.control.v1.LookupTopic
+	(*LookupTopicReply)(nil),  // 11: pubsub.control.v1.LookupTopicReply
+	(*Subscribe)(nil),         // 12: pubsub.control.v1.Subscribe
+	(*SubscribeReply)(nil),    // 13: pubsub.control.v1.SubscribeReply
+	(*Unsubscribe)(nil),       // 14: pubsub.control.v1.Unsubscribe
+	(*UnsubscribeReply)(nil),  // 15: pubsub.control.v1.UnsubscribeReply
+	(*GetStats)(nil),          // 16: pubsub.control.v1.GetStats
+	(*GetStatsReply)(nil),     // 17: pubsub.control.v1.GetStatsReply
+	(*PublishResult)(nil),     // 18: pubsub.control.v1.PublishResult
+	(*SubscriptionEnded)(nil), // 19: pubsub.control.v1.SubscriptionEnded
+	(*Heartbeat)(nil),         // 20: pubsub.control.v1.Heartbeat
+	(*Envelope)(nil),          // 21: pubsub.control.v1.Envelope
+	nil,                       // 22: pubsub.control.v1.GetStatsReply.CountersEntry
+	nil,                       // 23: pubsub.control.v1.GetStatsReply.GaugesEntry
 }
 var file_control_proto_depIdxs = []int32{
 	0,  // 0: pubsub.control.v1.TopicInfo.kind:type_name -> pubsub.control.v1.TopicKind
@@ -1722,30 +1807,33 @@ var file_control_proto_depIdxs = []int32{
 	3,  // 10: pubsub.control.v1.SubscribeReply.topic:type_name -> pubsub.control.v1.TopicInfo
 	1,  // 11: pubsub.control.v1.UnsubscribeReply.status:type_name -> pubsub.control.v1.Status
 	1,  // 12: pubsub.control.v1.GetStatsReply.status:type_name -> pubsub.control.v1.Status
-	21, // 13: pubsub.control.v1.GetStatsReply.counters:type_name -> pubsub.control.v1.GetStatsReply.CountersEntry
-	22, // 14: pubsub.control.v1.GetStatsReply.gauges:type_name -> pubsub.control.v1.GetStatsReply.GaugesEntry
+	22, // 13: pubsub.control.v1.GetStatsReply.counters:type_name -> pubsub.control.v1.GetStatsReply.CountersEntry
+	23, // 14: pubsub.control.v1.GetStatsReply.gauges:type_name -> pubsub.control.v1.GetStatsReply.GaugesEntry
 	2,  // 15: pubsub.control.v1.PublishResult.status:type_name -> pubsub.control.v1.AdmissionStatus
-	4,  // 16: pubsub.control.v1.Envelope.hello:type_name -> pubsub.control.v1.Hello
-	5,  // 17: pubsub.control.v1.Envelope.hello_reply:type_name -> pubsub.control.v1.HelloReply
-	6,  // 18: pubsub.control.v1.Envelope.create_topic:type_name -> pubsub.control.v1.CreateTopic
-	7,  // 19: pubsub.control.v1.Envelope.create_topic_reply:type_name -> pubsub.control.v1.CreateTopicReply
-	8,  // 20: pubsub.control.v1.Envelope.delete_topic:type_name -> pubsub.control.v1.DeleteTopic
-	9,  // 21: pubsub.control.v1.Envelope.delete_topic_reply:type_name -> pubsub.control.v1.DeleteTopicReply
-	10, // 22: pubsub.control.v1.Envelope.lookup_topic:type_name -> pubsub.control.v1.LookupTopic
-	11, // 23: pubsub.control.v1.Envelope.lookup_topic_reply:type_name -> pubsub.control.v1.LookupTopicReply
-	12, // 24: pubsub.control.v1.Envelope.subscribe:type_name -> pubsub.control.v1.Subscribe
-	13, // 25: pubsub.control.v1.Envelope.subscribe_reply:type_name -> pubsub.control.v1.SubscribeReply
-	14, // 26: pubsub.control.v1.Envelope.unsubscribe:type_name -> pubsub.control.v1.Unsubscribe
-	15, // 27: pubsub.control.v1.Envelope.unsubscribe_reply:type_name -> pubsub.control.v1.UnsubscribeReply
-	16, // 28: pubsub.control.v1.Envelope.get_stats:type_name -> pubsub.control.v1.GetStats
-	17, // 29: pubsub.control.v1.Envelope.get_stats_reply:type_name -> pubsub.control.v1.GetStatsReply
-	18, // 30: pubsub.control.v1.Envelope.publish_result:type_name -> pubsub.control.v1.PublishResult
-	19, // 31: pubsub.control.v1.Envelope.heartbeat:type_name -> pubsub.control.v1.Heartbeat
-	32, // [32:32] is the sub-list for method output_type
-	32, // [32:32] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	3,  // 16: pubsub.control.v1.SubscriptionEnded.topic:type_name -> pubsub.control.v1.TopicInfo
+	1,  // 17: pubsub.control.v1.SubscriptionEnded.reason:type_name -> pubsub.control.v1.Status
+	4,  // 18: pubsub.control.v1.Envelope.hello:type_name -> pubsub.control.v1.Hello
+	5,  // 19: pubsub.control.v1.Envelope.hello_reply:type_name -> pubsub.control.v1.HelloReply
+	6,  // 20: pubsub.control.v1.Envelope.create_topic:type_name -> pubsub.control.v1.CreateTopic
+	7,  // 21: pubsub.control.v1.Envelope.create_topic_reply:type_name -> pubsub.control.v1.CreateTopicReply
+	8,  // 22: pubsub.control.v1.Envelope.delete_topic:type_name -> pubsub.control.v1.DeleteTopic
+	9,  // 23: pubsub.control.v1.Envelope.delete_topic_reply:type_name -> pubsub.control.v1.DeleteTopicReply
+	10, // 24: pubsub.control.v1.Envelope.lookup_topic:type_name -> pubsub.control.v1.LookupTopic
+	11, // 25: pubsub.control.v1.Envelope.lookup_topic_reply:type_name -> pubsub.control.v1.LookupTopicReply
+	12, // 26: pubsub.control.v1.Envelope.subscribe:type_name -> pubsub.control.v1.Subscribe
+	13, // 27: pubsub.control.v1.Envelope.subscribe_reply:type_name -> pubsub.control.v1.SubscribeReply
+	14, // 28: pubsub.control.v1.Envelope.unsubscribe:type_name -> pubsub.control.v1.Unsubscribe
+	15, // 29: pubsub.control.v1.Envelope.unsubscribe_reply:type_name -> pubsub.control.v1.UnsubscribeReply
+	16, // 30: pubsub.control.v1.Envelope.get_stats:type_name -> pubsub.control.v1.GetStats
+	17, // 31: pubsub.control.v1.Envelope.get_stats_reply:type_name -> pubsub.control.v1.GetStatsReply
+	18, // 32: pubsub.control.v1.Envelope.publish_result:type_name -> pubsub.control.v1.PublishResult
+	20, // 33: pubsub.control.v1.Envelope.heartbeat:type_name -> pubsub.control.v1.Heartbeat
+	19, // 34: pubsub.control.v1.Envelope.subscription_ended:type_name -> pubsub.control.v1.SubscriptionEnded
+	35, // [35:35] is the sub-list for method output_type
+	35, // [35:35] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -1753,7 +1841,7 @@ func file_control_proto_init() {
 	if File_control_proto != nil {
 		return
 	}
-	file_control_proto_msgTypes[17].OneofWrappers = []any{
+	file_control_proto_msgTypes[18].OneofWrappers = []any{
 		(*Envelope_Hello)(nil),
 		(*Envelope_HelloReply)(nil),
 		(*Envelope_CreateTopic)(nil),
@@ -1770,6 +1858,7 @@ func file_control_proto_init() {
 		(*Envelope_GetStatsReply)(nil),
 		(*Envelope_PublishResult)(nil),
 		(*Envelope_Heartbeat)(nil),
+		(*Envelope_SubscriptionEnded)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1777,7 +1866,7 @@ func file_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   20,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

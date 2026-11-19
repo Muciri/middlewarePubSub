@@ -58,11 +58,13 @@ message Hello {
   uint32 udp_port = 4;
 }
 
+// udp_port é a porta de eventos do broker, no mesmo host da conexão TCP.
 message HelloReply {
   Status status = 1;
   string detail = 2;
   string broker_id = 3;
   uint32 heartbeat_interval_ms = 4;
+  uint32 udp_port = 5;
 }
 
 // max_ttl_ms igual a zero usa a validade padrão do tipo.
@@ -141,6 +143,13 @@ message PublishResult {
   AdmissionStatus status = 4;
 }
 
+// Enviado pelo broker sem pedido correspondente quando uma inscrição deixa
+// de existir por motivo alheio ao cliente, como a exclusão do tópico.
+message SubscriptionEnded {
+  TopicInfo topic = 1;
+  Status reason = 2;
+}
+
 // Enviado nos dois sentidos para detectar perda do canal de controle.
 message Heartbeat {
   uint64 nonce = 1;
@@ -168,5 +177,6 @@ message Envelope {
     GetStatsReply get_stats_reply = 23;
     PublishResult publish_result = 24;
     Heartbeat heartbeat = 25;
+    SubscriptionEnded subscription_ended = 26;
   }
 }
