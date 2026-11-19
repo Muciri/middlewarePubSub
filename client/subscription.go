@@ -40,9 +40,10 @@ func (s *Subscription) Topic() topic.Info { return s.info }
 // Events é fechado quando a inscrição termina; Err informa o motivo.
 func (s *Subscription) Events() <-chan Event { return s.queue.ch }
 
-// Err é nil enquanto a inscrição está ativa ou se ela terminou por
-// Unsubscribe. Nos demais casos indica o motivo: ErrTopicDeleted,
-// ErrConnectionLost ou ErrClosed.
+// Err é nil enquanto a inscrição está ativa, inclusive durante a troca de
+// broker, ou se ela terminou por Unsubscribe. Nos demais casos indica o
+// motivo: ErrTopicDeleted, ErrTopicRecreated (detectado na restauração),
+// ErrConnectionLost (reconexão esgotada) ou ErrClosed.
 func (s *Subscription) Err() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,6 +63,12 @@ func (s *Subscription) Unsubscribe(ctx context.Context) error {
 		return nil
 	}
 	return s.client.unsubscribe(ctx, s)
+}
+
+func (s *Subscription) isEnded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended
 }
 
 func (s *Subscription) finish(err error) {

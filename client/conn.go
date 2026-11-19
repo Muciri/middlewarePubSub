@@ -205,6 +205,13 @@ func (c *controlConn) fail(err error) bool {
 	return true
 }
 
+// cause devolve o motivo da perda do canal, ou nil se ele está ativo.
+func (c *controlConn) cause() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
 func (c *controlConn) close() {
 	c.fail(ErrClosed)
 	c.wc.Close()

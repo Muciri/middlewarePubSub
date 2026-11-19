@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -18,9 +19,11 @@ import (
 )
 
 const (
-	DefaultPublishTimeout   = time.Second
-	DefaultHeartbeatTimeout = 5 * time.Second
-	DefaultMaxPending       = 4096
+	DefaultPublishTimeout      = time.Second
+	DefaultHeartbeatTimeout    = 5 * time.Second
+	DefaultMaxPending          = 4096
+	DefaultReconnectBackoffMin = 100 * time.Millisecond
+	DefaultReconnectBackoffMax = 5 * time.Second
 )
 
 type Config struct {
@@ -43,6 +46,21 @@ type Config struct {
 	// DataPlane é o transporte UDP de eventos. Nil usa um MemoryDataPlane
 	// sem porta, que guarda os datagramas sem enviá-los.
 	DataPlane DataPlane
+
+	// ReconnectTimeout limita o tempo entre a detecção da falha e a
+	// reconexão; esgotado, o cliente encerra com ErrConnectionLost. Zero
+	// tenta até Close.
+	ReconnectTimeout time.Duration
+	// ReconnectBackoffMin e ReconnectBackoffMax limitam a espera entre
+	// tentativas, que dobra a cada falha. A primeira tentativa é imediata.
+	ReconnectBackoffMin time.Duration
+	ReconnectBackoffMax time.Duration
+	// OnReconnect, se definido, é chamado após cada reconexão concluída,
+	// fora das travas da biblioteca.
+	OnReconnect func(Reconnect)
+	// Logger recebe os registros de falha e reconexão. Nil usa
+	// slog.Default().
+	Logger *slog.Logger
 }
 
 var ErrInvalidConfig = errors.New("client: configuração inválida")
@@ -53,7 +71,8 @@ func (c Config) withDefaults() (Config, error) {
 		return c, fmt.Errorf("%w: nenhum broker", ErrInvalidConfig)
 	case c.Identity == "":
 		return c, fmt.Errorf("%w: identidade vazia", ErrInvalidConfig)
-	case c.PublishTimeout < 0 || c.HeartbeatTimeout < 0 || c.MaxPending < 0:
+	case c.PublishTimeout < 0 || c.HeartbeatTimeout < 0 || c.MaxPending < 0 ||
+		c.ReconnectTimeout < 0 || c.ReconnectBackoffMin < 0 || c.ReconnectBackoffMax < 0:
 		return c, fmt.Errorf("%w: valores negativos", ErrInvalidConfig)
 	}
 	for i, addr := range c.Brokers {
@@ -73,16 +92,30 @@ func (c Config) withDefaults() (Config, error) {
 	if c.DataPlane == nil {
 		c.DataPlane = NewMemoryDataPlane(0)
 	}
+	if c.ReconnectBackoffMin == 0 {
+		c.ReconnectBackoffMin = DefaultReconnectBackoffMin
+	}
+	if c.ReconnectBackoffMax == 0 {
+		c.ReconnectBackoffMax = DefaultReconnectBackoffMax
+	}
+	if c.ReconnectBackoffMin > c.ReconnectBackoffMax {
+		return c, fmt.Errorf("%w: recuo mínimo maior que o máximo", ErrInvalidConfig)
+	}
+	if c.Logger == nil {
+		c.Logger = slog.Default()
+	}
 	return c, nil
 }
 
 var (
 	ErrClosed            = errors.New("client: cliente encerrado")
 	ErrConnectionLost    = errors.New("client: canal de controle perdido")
+	ErrReconnecting      = errors.New("client: reconectando a um broker")
 	ErrNoBroker          = errors.New("client: nenhum broker disponível")
 	ErrTooManyPending    = errors.New("client: limite de publicações pendentes atingido")
 	ErrAlreadySubscribed = errors.New("client: já inscrito no tópico")
 	ErrTopicDeleted      = errors.New("client: tópico apagado")
+	ErrTopicRecreated    = errors.New("client: tópico apagado e recriado com nova geração")
 
 	ErrUnauthenticated = errors.New("client: autenticação recusada")
 	ErrForbidden       = errors.New("client: operação não permitida para a identidade")
@@ -128,12 +161,24 @@ func statusError(st pb.Status, detail string) error {
 type Client struct {
 	cfg     Config
 	dp      DataPlane
+	log     *slog.Logger
 	session uint64
-	conn    *controlConn
 	pending *pendingTable
 
-	mu       sync.Mutex
-	err      error // ErrClosed ou ErrConnectionLost
+	// closing é cancelado no encerramento e interrompe a reconexão.
+	closing     context.Context
+	cancelClose context.CancelFunc
+	wg          sync.WaitGroup
+
+	mu   sync.Mutex
+	err  error // ErrClosed ou ErrConnectionLost: estado terminal
+	conn *controlConn
+	// current é o índice em cfg.Brokers do broker atual.
+	current      int
+	reconnecting bool
+	// epoch muda a cada falha detectada; uma inscrição confirmada por um
+	// canal de época anterior não foi restaurada.
+	epoch    uint64
 	topics   map[string]topic.Info
 	byName   map[string]*Subscription
 	byRef    map[topic.Ref]*Subscription
@@ -153,14 +198,15 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	var conn *controlConn
+	var current int
 	var errs []error
-	for _, addr := range cfg.Brokers {
+	for i, addr := range cfg.Brokers {
 		conn, err = dialControl(ctx, addr, cfg, session, cfg.DataPlane.Port())
 		if err == nil {
+			current = i
 			break
 		}
-		if ctx.Err() != nil || errors.Is(err, ErrUnauthenticated) ||
-			errors.Is(err, ErrInvalidArgument) || errors.Is(err, ErrSessionConflict) {
+		if ctx.Err() != nil || terminalDialError(err) {
 			return nil, err
 		}
 		errs = append(errs, fmt.Errorf("%s: %w", addr, err))
@@ -172,18 +218,31 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	c := &Client{
 		cfg:      cfg,
 		dp:       cfg.DataPlane,
+		log:      cfg.Logger,
 		session:  session,
 		conn:     conn,
+		current:  current,
 		pending:  newPendingTable(cfg.MaxPending, cfg.PublishTimeout),
 		topics:   make(map[string]topic.Info),
 		byName:   make(map[string]*Subscription),
 		byRef:    make(map[topic.Ref]*Subscription),
 		sequence: make(map[topic.Ref]uint64),
 	}
+	c.closing, c.cancelClose = context.WithCancel(context.Background())
 	c.dp.SetBroker(conn.udpAddr)
 	c.dp.SetDeliver(c.deliver)
-	conn.start(c.handlePush, c.handleLost)
+	c.startConn(conn)
 	return c, nil
+}
+
+// terminalDialError indica recusa que se repetiria em qualquer broker.
+func terminalDialError(err error) bool {
+	return errors.Is(err, ErrUnauthenticated) || errors.Is(err, ErrInvalidArgument) ||
+		errors.Is(err, ErrSessionConflict)
+}
+
+func (c *Client) startConn(conn *controlConn) {
+	conn.start(c.handlePush, func() { c.connLost(conn) })
 }
 
 func newSessionID() (uint64, error) {
@@ -198,8 +257,12 @@ func newSessionID() (uint64, error) {
 	}
 }
 
-// BrokerID identifica o broker atual.
-func (c *Client) BrokerID() string { return c.conn.brokerID }
+// BrokerID identifica o broker atual ou, durante a reconexão, o último.
+func (c *Client) BrokerID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn.brokerID
+}
 
 func (c *Client) state() error {
 	c.mu.Lock()
@@ -207,11 +270,37 @@ func (c *Client) state() error {
 	return c.err
 }
 
+// usableLocked devolve o erro que impede novos comandos: o encerramento
+// ou a reconexão em curso.
+func (c *Client) usableLocked() error {
+	switch {
+	case c.err != nil:
+		return c.err
+	case c.reconnecting:
+		return ErrReconnecting
+	}
+	return nil
+}
+
+// activeConn devolve o canal atual, ou o erro que impede usá-lo.
+func (c *Client) activeConn() (*controlConn, uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.usableLocked(); err != nil {
+		return nil, 0, err
+	}
+	return c.conn, c.epoch, nil
+}
+
+// command envia um comando pelo canal atual. Durante a reconexão falha
+// com ErrReconnecting; se o canal cair com o comando em curso, o
+// resultado é ErrConnectionLost e o efeito no broker é desconhecido.
 func (c *Client) command(ctx context.Context, env *pb.Envelope) (*pb.Envelope, error) {
-	if err := c.state(); err != nil {
+	conn, _, err := c.activeConn()
+	if err != nil {
 		return nil, err
 	}
-	return c.conn.call(ctx, env)
+	return conn.call(ctx, env)
 }
 
 func (c *Client) CreateTopic(ctx context.Context, spec topic.Spec) (topic.Info, error) {
@@ -269,11 +358,11 @@ func (c *Client) topicReply(st pb.Status, detail string, m *pb.TopicInfo) (topic
 }
 
 // Subscribe registra a inscrição no broker atual. O retorno ocorre depois
-// que o par confirma a inscrição.
+// que o par confirma a inscrição. Após uma troca de broker, a inscrição é
+// restaurada sem fechar o canal de Events.
 func (c *Client) Subscribe(ctx context.Context, name string) (*Subscription, error) {
 	c.mu.Lock()
-	if c.err != nil {
-		err := c.err
+	if err := c.usableLocked(); err != nil {
 		c.mu.Unlock()
 		return nil, err
 	}
@@ -282,14 +371,19 @@ func (c *Client) Subscribe(ctx context.Context, name string) (*Subscription, err
 		return nil, ErrAlreadySubscribed
 	}
 	c.byName[name] = nil // reserva o nome durante o pedido
+	conn, epoch := c.conn, c.epoch
 	c.mu.Unlock()
 
-	sub, err := c.subscribe(ctx, name)
+	sub, err := c.subscribe(ctx, conn, name)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err == nil && c.err != nil {
+	if err == nil && (c.err != nil || c.epoch != epoch) {
+		// Confirmada por um canal que caiu: não entra na restauração.
 		err = c.err
+		if err == nil {
+			err = ErrReconnecting
+		}
 		sub.finish(err)
 	}
 	if err != nil {
@@ -301,8 +395,8 @@ func (c *Client) Subscribe(ctx context.Context, name string) (*Subscription, err
 	return sub, nil
 }
 
-func (c *Client) subscribe(ctx context.Context, name string) (*Subscription, error) {
-	env, err := c.conn.call(ctx, &pb.Envelope{Body: &pb.Envelope_Subscribe{Subscribe: &pb.Subscribe{Name: name}}})
+func (c *Client) subscribe(ctx context.Context, conn *controlConn, name string) (*Subscription, error) {
+	env, err := conn.call(ctx, &pb.Envelope{Body: &pb.Envelope_Subscribe{Subscribe: &pb.Subscribe{Name: name}}})
 	if err != nil {
 		return nil, err
 	}
@@ -315,11 +409,23 @@ func (c *Client) subscribe(ctx context.Context, name string) (*Subscription, err
 }
 
 // unsubscribe pede a remoção ao broker. Tópico inexistente também encerra
-// a inscrição local, pois não há mais o que receber.
+// a inscrição local, pois não há mais o que receber. Com o canal perdido ou
+// em reconexão, a inscrição termina só localmente: a do broker antigo caiu
+// com a conexão, e a restauração não a inclui.
 func (c *Client) unsubscribe(ctx context.Context, s *Subscription) error {
-	env, err := c.command(ctx, &pb.Envelope{Body: &pb.Envelope_Unsubscribe{Unsubscribe: &pb.Unsubscribe{
-		Name: s.info.Name, Generation: uint32(s.info.Generation),
-	}}})
+	conn, _, err := c.activeConn()
+	if errors.Is(err, ErrReconnecting) {
+		c.endSubscription(s, nil)
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	env, err := conn.call(ctx, unsubscribeMsg(s.info))
+	if errors.Is(err, ErrConnectionLost) {
+		c.endSubscription(s, nil)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -329,6 +435,12 @@ func (c *Client) unsubscribe(ctx context.Context, s *Subscription) error {
 	}
 	c.endSubscription(s, nil)
 	return nil
+}
+
+func unsubscribeMsg(info topic.Info) *pb.Envelope {
+	return &pb.Envelope{Body: &pb.Envelope_Unsubscribe{Unsubscribe: &pb.Unsubscribe{
+		Name: info.Name, Generation: uint32(info.Generation),
+	}}}
 }
 
 // endSubscription tira a inscrição dos índices e fecha seu canal.
@@ -346,8 +458,10 @@ func (c *Client) endSubscription(s *Subscription, err error) {
 
 // Publish envia o evento por UDP e retorna sem aguardar a admissão. ttl zero
 // usa a validade máxima do tópico. Com MaxPending publicações sem resultado,
-// falha imediatamente com ErrTooManyPending. Se o tópico não estiver em
-// cache, é consultado no broker com o prazo PublishTimeout.
+// falha imediatamente com ErrTooManyPending; durante a reconexão, com
+// ErrReconnecting. Se o tópico não estiver em cache, é consultado no broker
+// com o prazo PublishTimeout. A sequência por tópico continua após a troca
+// de broker.
 func (c *Client) Publish(topicName string, payload []byte, ttl time.Duration) (*PendingPublish, error) {
 	if ttl < 0 {
 		return nil, fmt.Errorf("%w: validade negativa", ErrInvalidArgument)
@@ -361,8 +475,7 @@ func (c *Client) Publish(topicName string, payload []byte, ttl time.Duration) (*
 	}
 
 	c.mu.Lock()
-	if c.err != nil {
-		err := c.err
+	if err := c.usableLocked(); err != nil {
 		c.mu.Unlock()
 		return nil, err
 	}
@@ -428,13 +541,18 @@ func (c *Client) Stats(ctx context.Context) (Stats, error) {
 	return s, nil
 }
 
-// Close encerra o canal de controle e o plano de dados. Publicações
-// pendentes terminam com UNKNOWN e as inscrições fecham com ErrClosed.
+// Close encerra o canal de controle, a reconexão em curso e o plano de
+// dados. Publicações pendentes terminam com UNKNOWN e as inscrições fecham
+// com ErrClosed.
 func (c *Client) Close() error {
 	if !c.shutdown(ErrClosed) {
 		return nil
 	}
-	c.conn.close()
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	conn.close()
+	c.wg.Wait()
 	return c.dp.Close()
 }
 
@@ -447,6 +565,7 @@ func (c *Client) shutdown(cause error) bool {
 		return false
 	}
 	c.err = cause
+	c.cancelClose()
 	subs := make([]*Subscription, 0, len(c.byRef))
 	for _, s := range c.byRef {
 		subs = append(subs, s)
@@ -460,10 +579,6 @@ func (c *Client) shutdown(cause error) bool {
 		s.finish(cause)
 	}
 	return true
-}
-
-func (c *Client) handleLost() {
-	c.shutdown(ErrConnectionLost)
 }
 
 func (c *Client) handlePush(env *pb.Envelope) {

@@ -3,6 +3,8 @@ package client
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"testing"
@@ -52,6 +54,7 @@ func dial(t *testing.T, addr, identity string, mutate func(*Config)) (*Client, *
 		Identity:  identity,
 		Token:     creds[identity].Token,
 		DataPlane: dp,
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	if mutate != nil {
 		mutate(&cfg)
@@ -368,9 +371,14 @@ func TestStats(t *testing.T) {
 	}
 }
 
-func TestBrokerFailureEndsClient(t *testing.T) {
+func TestBrokerFailureEndsClientAfterReconnectTimeout(t *testing.T) {
 	b, addr := startBroker(t, broker.Config{})
-	c, _ := dial(t, addr, "ana", func(cfg *Config) { cfg.PublishTimeout = time.Minute })
+	c, _ := dial(t, addr, "ana", func(cfg *Config) {
+		cfg.PublishTimeout = time.Minute
+		cfg.ReconnectTimeout = 200 * time.Millisecond
+		cfg.ReconnectBackoffMin = 10 * time.Millisecond
+		cfg.ReconnectBackoffMax = 50 * time.Millisecond
+	})
 	c.CreateTopic(ctx(t), topic.Spec{Name: "sala", Kind: topic.KindEphemeral})
 	sub, _ := c.Subscribe(ctx(t), "sala")
 	p, _ := c.Publish("sala", nil, 0)
@@ -433,7 +441,14 @@ func TestHeartbeatSilenceIsDetected(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cliente não enviou heartbeat")
 	}
-	eventually(t, func() bool { return errors.Is(c.state(), ErrConnectionLost) }, "detecção do silêncio do broker")
+	eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return c.reconnecting
+	}, "detecção do silêncio do broker")
+	if _, err := c.Publish("sala", nil, 0); !errors.Is(err, ErrReconnecting) {
+		t.Fatalf("Publish durante a reconexão: %v", err)
+	}
 }
 
 func TestCloseEndsEverything(t *testing.T) {
