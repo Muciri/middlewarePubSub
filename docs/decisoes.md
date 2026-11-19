@@ -423,3 +423,108 @@ Sem enlace não há encaminhamento entre brokers, e a visão do par é
 reenviada por completo na volta, então não há interesse obsoleto.
 Descartada: tentar a restauração até o enlace voltar; fechar a inscrição
 com erro.
+
+## Reconexão do cliente
+
+**D59. Detecção e ordem de tentativas.**
+A falha é a perda do TCP ou `HeartbeatTimeout` (5 s) sem receber nada do
+broker. A biblioteca tenta os brokers da lista a partir do seguinte ao que
+falhou, em ordem circular. A primeira tentativa é imediata; as seguintes
+esperam um recuo que começa em 100 ms e dobra até 5 s. Cada tentativa tem o
+prazo de `HeartbeatTimeout`. Por padrão tenta até `Close`;
+`ReconnectTimeout` limita o tempo total e, esgotado, encerra o cliente com
+`ErrConnectionLost`. Recusa de credencial ou de sessão encerra o cliente
+sem novas tentativas.
+Justificativa: com dois brokers o outro é tentado primeiro, e o recuo evita
+martelar brokers fora do ar.
+Descartada: desistir após um número fixo de tentativas por padrão.
+
+**D60. Sem retorno automático.**
+O cliente só troca de broker depois de uma falha; quando o broker original
+volta, o cliente continua no atual.
+Justificativa: evita uma segunda interrupção sem necessidade e mantém a
+carga onde está.
+Descartada: voltar ao broker preferido quando ele reaparecer.
+
+**D61. Restauração com a mesma sessão e a geração conhecida.**
+O novo Hello usa a mesma sessão. Cada inscrição ativa é reenviada com a
+geração conhecida e `restore = true` (D58). TOPIC_NOT_FOUND encerra a
+inscrição; uma consulta pelo nome distingue `ErrTopicDeleted` de
+`ErrTopicRecreated`. UNAVAILABLE (catálogo não sincronizado, D57) ou queda
+do canal encerram a tentativa, e a restauração recomeça no broker seguinte.
+Outros erros encerram a inscrição com o erro correspondente.
+Justificativa: a geração impede que uma inscrição passe a receber eventos
+de outra versão do tópico sem a aplicação saber.
+Descartada: reinscrever pelo nome na geração atual.
+
+**D62. Os canais de `Events()` permanecem abertos durante a troca.**
+`Err()` continua nil. Os eventos do novo broker chegam pelo mesmo canal.
+Justificativa: a aplicação não precisa refazer o laço de leitura a cada
+falha.
+Descartada: fechar as inscrições e exigir nova inscrição.
+
+**D63. Política de UNKNOWN: sem retransmissão automática.**
+As publicações pendentes viram UNKNOWN no momento da detecção da falha, sem
+esperar o prazo de `PublishTimeout`. A biblioteca nunca reenvia uma
+publicação; a decisão fica com a aplicação.
+Riscos:
+- UNKNOWN não significa perda. O broker antigo pode ter admitido e
+  entregado o evento antes de cair.
+- Se a aplicação republicar, o evento ganha nova sequência, e o novo broker
+  não tem como reconhecê-lo como repetido. Os assinantes podem receber o
+  mesmo conteúdo duas vezes.
+- Se a aplicação não republicar, o evento pode ter se perdido.
+
+Para tópicos de estado, republicar é seguro, pois a versão mais nova
+substitui a anterior. Para tópicos efêmeros, como lances, a aplicação que
+republica deve tolerar duplicatas, por exemplo com um identificador no
+próprio conteúdo.
+Justificativa: retransmitir sem saber o que foi admitido transformaria
+toda falha em duplicação silenciosa.
+Descartada: reenviar as pendentes ao novo broker com a mesma sequência, o
+que exigiria deduplicação compartilhada entre os brokers.
+
+**D64. Publish e comandos falham na hora durante a reconexão.**
+`Publish`, `Subscribe`, `CreateTopic`, `DeleteTopic`, `LookupTopic` e
+`Stats` retornam `ErrReconnecting` sem esperar. Um comando em curso quando
+o canal cai retorna `ErrConnectionLost`, com efeito desconhecido no broker.
+Justificativa: a aplicação de tempo real decide se espera ou descarta; um
+Publish bloqueado atrasaria eventos que já estariam vencidos.
+Descartada: enfileirar os comandos até a reconexão.
+
+**D65. A sequência por tópico continua após a troca.**
+Justificativa: a sessão é a mesma, e a ordem por publicador se mantém para
+os assinantes.
+Descartada: reiniciar a sequência no novo broker.
+
+**D66. Casos de borda da restauração.**
+- Uma inscrição confirmada por um canal que caiu antes do registro local
+  retorna `ErrReconnecting` e não entra na restauração.
+- `Unsubscribe` durante a reconexão termina a inscrição só localmente,
+  pois a do broker antigo caiu com a conexão.
+- Uma inscrição restaurada e cancelada durante a tentativa é retirada do
+  novo broker logo após a troca.
+
+Justificativa: o broker não fica com inscrições que a aplicação não tem.
+Descartada: recusar `Unsubscribe` durante a reconexão.
+
+**D67. O cache de tópicos é descartado na detecção da falha.**
+Justificativa: o catálogo do próximo broker passa a ser a referência; a
+primeira publicação em cada tópico refaz a consulta.
+Descartada: manter o cache e depender do resultado TOPIC_NOT_FOUND.
+
+**D68. Instrumentação da lacuna.**
+A biblioteca registra em log (`log/slog`) a detecção da falha e a
+restauração. O registro traz:
+- a lacuna, entre a detecção da falha e o fim da restauração das
+  inscrições;
+- o número de tentativas;
+- as inscrições restauradas e as encerradas.
+
+`Config.OnReconnect` recebe os mesmos dados em `Reconnect`, com `Gap()`.
+`Config.Logger` escolhe o destino, com `slog.Default()` por padrão.
+Justificativa: a medição fica disponível tanto em log quanto para os
+ensaios automatizados.
+Descartada: só log em texto, que exigiria interpretar a saída nos ensaios.
+A lacuna de eventos, do último antes da falha ao primeiro depois dela,
+fica para a integração com o plano de dados.
