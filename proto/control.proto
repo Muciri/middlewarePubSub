@@ -1,0 +1,172 @@
+// Canal de controle entre biblioteca cliente e broker (porta 7000/TCP).
+// Cada mensagem trafega como um Envelope precedido por 4 bytes de tamanho.
+syntax = "proto3";
+
+package pubsub.control.v1;
+
+option go_package = "github.com/franciscovmn/middlewarePubSub/internal/pb;pb";
+
+enum TopicKind {
+  TOPIC_KIND_UNSPECIFIED = 0;
+  TOPIC_KIND_EPHEMERAL = 1;
+  TOPIC_KIND_STATE = 2;
+}
+
+// Status das respostas a comandos.
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_OK = 1;
+  STATUS_UNAUTHENTICATED = 2;
+  STATUS_FORBIDDEN = 3;
+  STATUS_INVALID_ARGUMENT = 4;
+  STATUS_TOPIC_EXISTS = 5;
+  STATUS_TOPIC_NOT_FOUND = 6;
+  STATUS_UNAVAILABLE = 7;
+  STATUS_LIMIT_EXCEEDED = 8;
+  STATUS_SESSION_CONFLICT = 9;
+  STATUS_INTERNAL = 10;
+}
+
+// Resultado da admissão de um evento publicado por UDP.
+enum AdmissionStatus {
+  ADMISSION_UNSPECIFIED = 0;
+  ADMISSION_ACCEPTED = 1;
+  ADMISSION_NO_SUBSCRIBERS = 2;
+  ADMISSION_TOPIC_NOT_FOUND = 3;
+  ADMISSION_LIMIT_EXCEEDED = 4;
+  ADMISSION_OVERLOADED = 5;
+  ADMISSION_INVALID_SIZE = 6;
+  ADMISSION_INVALID_TTL = 7;
+  ADMISSION_UNAVAILABLE = 8;
+  ADMISSION_UNKNOWN = 9;
+}
+
+message TopicInfo {
+  uint32 id = 1;
+  string name = 2;
+  uint32 generation = 3;
+  TopicKind kind = 4;
+  uint32 max_ttl_ms = 5;
+}
+
+// Primeira mensagem da conexão. O endereço UDP do cliente é o IP de origem
+// da conexão TCP com a porta informada em udp_port.
+message Hello {
+  string identity = 1;
+  uint64 session_id = 2;
+  string token = 3;
+  uint32 udp_port = 4;
+}
+
+message HelloReply {
+  Status status = 1;
+  string detail = 2;
+  string broker_id = 3;
+  uint32 heartbeat_interval_ms = 4;
+}
+
+// max_ttl_ms igual a zero usa a validade padrão do tipo.
+message CreateTopic {
+  string name = 1;
+  TopicKind kind = 2;
+  uint32 max_ttl_ms = 3;
+}
+
+message CreateTopicReply {
+  Status status = 1;
+  string detail = 2;
+  TopicInfo topic = 3;
+}
+
+message DeleteTopic {
+  string name = 1;
+}
+
+message DeleteTopicReply {
+  Status status = 1;
+  string detail = 2;
+  TopicInfo topic = 3;
+}
+
+message LookupTopic {
+  string name = 1;
+}
+
+message LookupTopicReply {
+  Status status = 1;
+  string detail = 2;
+  TopicInfo topic = 3;
+}
+
+// generation igual a zero aceita a geração atual. Na restauração de
+// inscrições após reconexão, a biblioteca envia a geração que conhecia, e
+// uma geração diferente da atual resulta em STATUS_TOPIC_NOT_FOUND.
+message Subscribe {
+  string name = 1;
+  uint32 generation = 2;
+}
+
+message SubscribeReply {
+  Status status = 1;
+  string detail = 2;
+  TopicInfo topic = 3;
+}
+
+message Unsubscribe {
+  string name = 1;
+  uint32 generation = 2;
+}
+
+message UnsubscribeReply {
+  Status status = 1;
+  string detail = 2;
+}
+
+message GetStats {}
+
+message GetStatsReply {
+  Status status = 1;
+  string detail = 2;
+  string broker_id = 3;
+  uint64 uptime_ms = 4;
+  map<string, uint64> counters = 5;
+  map<string, int64> gauges = 6;
+}
+
+// Enviado pelo broker sem pedido correspondente (request_id zero).
+message PublishResult {
+  uint32 topic_id = 1;
+  uint32 generation = 2;
+  uint64 sequence = 3;
+  AdmissionStatus status = 4;
+}
+
+// Enviado nos dois sentidos para detectar perda do canal de controle.
+message Heartbeat {
+  uint64 nonce = 1;
+}
+
+// request_id associa cada resposta ao pedido de origem. Mensagens enviadas
+// pelo broker por iniciativa própria usam request_id zero.
+message Envelope {
+  uint64 request_id = 1;
+
+  oneof body {
+    Hello hello = 10;
+    HelloReply hello_reply = 11;
+    CreateTopic create_topic = 12;
+    CreateTopicReply create_topic_reply = 13;
+    DeleteTopic delete_topic = 14;
+    DeleteTopicReply delete_topic_reply = 15;
+    LookupTopic lookup_topic = 16;
+    LookupTopicReply lookup_topic_reply = 17;
+    Subscribe subscribe = 18;
+    SubscribeReply subscribe_reply = 19;
+    Unsubscribe unsubscribe = 20;
+    UnsubscribeReply unsubscribe_reply = 21;
+    GetStats get_stats = 22;
+    GetStatsReply get_stats_reply = 23;
+    PublishResult publish_result = 24;
+    Heartbeat heartbeat = 25;
+  }
+}
