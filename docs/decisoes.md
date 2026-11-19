@@ -538,3 +538,62 @@ envia heartbeats no intervalo anunciado.
 Justificativa: um limite menor faria o cliente trocar de broker sem falha
 real. Três intervalos toleram a perda ou o atraso de dois heartbeats.
 Descartada: recusar a conexão; manter o limite configurado e só avisar.
+
+## Ensaios de falha
+
+**D70. Registros estruturados com horário UTC em milissegundos.**
+Broker, enlace, biblioteca e sonda registram com `log/slog`, em texto ou
+JSON. Cada evento de falha, enlace, catálogo, sessão e restauração tem uma
+mensagem própria, com a causa. As tentativas de reconexão do enlace saem
+em nível debug.
+Justificativa: a lacuna do failover é medida comparando registros de
+processos diferentes, e o fuso UTC evita ambiguidade entre máquinas.
+Descartada: registro em texto livre com o horário local.
+
+**D71. Sonda de ensaio só com o canal de controle (`cmd/sonda`).**
+Ela mantém inscrições, registra cada failover com a lacuna, consulta o
+canal de comandos periodicamente e executa comandos avulsos, incluindo
+marcas de horário.
+Justificativa: permite ensaiar a seção 8 sem depender do plano de dados
+UDP.
+Descartada: esperar o aplicativo do leilão para começar os ensaios.
+
+**D72. Falhas de rede injetadas com `iptables` e `tc` dentro dos
+contêineres.**
+Os serviços têm `NET_ADMIN`; o proxy de testes fica só nos testes
+automatizados.
+Justificativa: descarta pacotes de verdade, mantém o endereço UDP do par
+aprendido pelo IP real e serve aos ensaios de carga com perda e atraso de
+datagramas.
+Descartada: um proxy TCP entre os contêineres, que não cobre UDP e exigiria
+sobrescrever o endereço do par.
+
+**D73. Variantes de falha.**
+- Processo: morto (`SIGKILL`), parado (`SIGTERM`), travado (`pause`) e
+  isolado da rede (`network disconnect`).
+- Corte silencioso: descarte na entrada, nos dois lados.
+- Corte explícito: RST nos dois sentidos, aplicado num lado, com os próprios
+  RST liberados para que uma regra não descarte o RST da outra.
+
+Justificativa: separa a detecção por encerramento do TCP da detecção por
+silêncio, que é o caso da falha de host.
+Descartada: uma única forma de falha por cenário.
+
+**D74. Medidas relativas a uma marca de injeção registrada pela sonda.**
+A marca é gravada logo antes do comando de injeção, com o mesmo relógio e
+o mesmo formato dos registros. As medidas por sonda são três:
+- injeção até a detecção;
+- injeção até a restauração;
+- lacuna da biblioteca.
+
+Justificativa: a lacuna da biblioteca começa na detecção e não mostra os
+5 s de silêncio das falhas silenciosas; a interrupção vista pela aplicação
+começa na falha.
+Descartada: usar só a lacuna registrada pela biblioteca.
+
+**D75. Roteiros com verificação automática do resultado esperado.**
+Cada resultado esperado é registrado como `ok` ou `divergente`, sem
+interromper o cenário, e os registros são sempre guardados.
+Justificativa: os ensaios se repetem a cada mudança, e uma divergência
+precisa dos registros para ser analisada.
+Descartada: conferir os registros à mão.
