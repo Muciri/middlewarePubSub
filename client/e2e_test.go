@@ -1,12 +1,15 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/netip"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -473,5 +476,64 @@ func TestCloseEndsEverything(t *testing.T) {
 	}
 	if err := c.Close(); err != nil {
 		t.Fatalf("segundo Close: %v", err)
+	}
+}
+
+// syncBuffer guarda a saída do log com acesso concorrente.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func TestSilenceLimitRaisedToThreeBrokerHeartbeats(t *testing.T) {
+	_, addr := startBroker(t, broker.Config{HeartbeatInterval: 200 * time.Millisecond})
+	var out syncBuffer
+	c, _ := dial(t, addr, "ana", func(cfg *Config) {
+		cfg.HeartbeatTimeout = 300 * time.Millisecond
+		cfg.Logger = slog.New(slog.NewTextHandler(&out, nil))
+	})
+
+	if got := c.conn.silence; got != 600*time.Millisecond {
+		t.Fatalf("limite efetivo = %v", got)
+	}
+	if log := out.String(); !strings.Contains(log, "level=WARN") || !strings.Contains(log, "limite_efetivo=600ms") {
+		t.Fatalf("aviso ausente: %q", log)
+	}
+	time.Sleep(time.Second)
+	if err := c.state(); err != nil || c.BrokerID() != "A" {
+		t.Fatalf("cliente deveria seguir conectado: %v", err)
+	}
+	c.mu.Lock()
+	reconnecting := c.reconnecting
+	c.mu.Unlock()
+	if reconnecting {
+		t.Fatal("falha detectada sem falha real")
+	}
+}
+
+func TestSilenceLimitKeptWhenEnough(t *testing.T) {
+	_, addr := startBroker(t, broker.Config{HeartbeatInterval: 100 * time.Millisecond})
+	var out syncBuffer
+	c, _ := dial(t, addr, "ana", func(cfg *Config) {
+		cfg.HeartbeatTimeout = 300 * time.Millisecond
+		cfg.Logger = slog.New(slog.NewTextHandler(&out, nil))
+	})
+	if got := c.conn.silence; got != 300*time.Millisecond {
+		t.Fatalf("limite efetivo = %v", got)
+	}
+	if out.String() != "" {
+		t.Fatalf("aviso inesperado: %q", out.String())
 	}
 }

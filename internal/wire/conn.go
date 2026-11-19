@@ -81,6 +81,10 @@ func (c *Conn) Receive(m proto.Message) error {
 	return ReadMessage(c.r, m, c.opts.MaxFrame)
 }
 
+// SetReadTimeout troca o prazo de cada Receive. Deve ser chamado antes de
+// a leitura passar a outra goroutine, ou pela própria goroutine leitora.
+func (c *Conn) SetReadTimeout(d time.Duration) { c.opts.ReadTimeout = d }
+
 func (c *Conn) RemoteAddr() net.Addr { return c.nc.RemoteAddr() }
 
 func (c *Conn) Close() error { return c.nc.Close() }

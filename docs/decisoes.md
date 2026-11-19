@@ -528,3 +528,13 @@ ensaios automatizados.
 Descartada: só log em texto, que exigiria interpretar a saída nos ensaios.
 A lacuna de eventos, do último antes da falha ao primeiro depois dela,
 fica para a integração com o plano de dados.
+
+**D69. O limite de silêncio do cliente cobre ao menos três heartbeats do
+broker.**
+Ao receber o HelloReply, o cliente compara o intervalo anunciado com o
+próprio limite. Se o limite for menor que três intervalos, o cliente o
+eleva para três intervalos naquele canal e registra um aviso. O cliente
+envia heartbeats no intervalo anunciado.
+Justificativa: um limite menor faria o cliente trocar de broker sem falha
+real. Três intervalos toleram a perda ou o atraso de dois heartbeats.
+Descartada: recusar a conexão; manter o limite configurado e só avisar.

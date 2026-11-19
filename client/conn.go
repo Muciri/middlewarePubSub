@@ -18,6 +18,8 @@ type controlConn struct {
 	brokerID  string
 	udpAddr   netip.AddrPort
 	heartbeat time.Duration
+	// silence é o limite de silêncio efetivo deste canal.
+	silence time.Duration
 
 	mu      sync.Mutex
 	nextID  uint64
@@ -76,19 +78,41 @@ func dialControl(ctx context.Context, addr string, cfg Config, session uint64, u
 		wc.Close()
 		return nil, err
 	}
-	interval := time.Duration(reply.GetHeartbeatIntervalMs()) * time.Millisecond
-	if interval <= 0 || interval >= cfg.HeartbeatTimeout {
-		interval = cfg.HeartbeatTimeout / 5
-	}
+	interval, silence := heartbeatTiming(cfg, reply, addr)
+	wc.SetReadTimeout(silence)
 	return &controlConn{
 		wc:        wc,
 		brokerID:  reply.GetBrokerId(),
 		udpAddr:   netip.AddrPortFrom(remote.Addr().Unmap(), uint16(reply.GetUdpPort())),
 		heartbeat: interval,
+		silence:   silence,
 		nextID:    1,
 		waiters:   make(map[uint64]chan *pb.Envelope),
 		lost:      make(chan struct{}),
 	}, nil
+}
+
+// minSilenceBeats é o número mínimo de intervalos de heartbeat do broker
+// cobertos pelo limite de silêncio.
+const minSilenceBeats = 3
+
+// heartbeatTiming devolve o intervalo de envio de heartbeats, igual ao
+// anunciado pelo broker, e o limite de silêncio do canal. Um limite menor
+// que três intervalos do broker trocaria de broker sem falha real; nesse
+// caso o limite é elevado e o ajuste fica registrado.
+func heartbeatTiming(cfg Config, reply *pb.HelloReply, addr string) (interval, silence time.Duration) {
+	silence = cfg.HeartbeatTimeout
+	interval = time.Duration(reply.GetHeartbeatIntervalMs()) * time.Millisecond
+	if interval <= 0 {
+		return silence / 5, silence
+	}
+	if min := minSilenceBeats * interval; silence < min {
+		cfg.Logger.Warn("client: limite de silêncio elevado para cobrir o heartbeat do broker",
+			"broker", reply.GetBrokerId(), "addr", addr,
+			"limite_configurado", silence, "heartbeat_broker", interval, "limite_efetivo", min)
+		silence = min
+	}
+	return interval, silence
 }
 
 func contextErr(ctx context.Context, err error) error {
