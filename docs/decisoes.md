@@ -260,3 +260,125 @@ comandos/s; os stubs não restringem nada.
 Justificativa: os dois pertencem ao plano de dados e ao diagnóstico, mas são
 consultados pelo canal de controle.
 Descartada: implementar contadores e cotas dentro do broker.
+
+## Canal entre brokers
+
+**D39. Papéis fixos: o A disca, o B escuta.**
+Cada lado confere o identificador esperado do par no `PeerHello`; um token
+compartilhado é opcional.
+Justificativa: regra determinística, sem desempate entre duas discagens
+simultâneas.
+Descartada: os dois discarem e um desempate escolher a conexão.
+
+**D40. Conexão duplicada recusada; o A tenta de novo com recuo
+progressivo.**
+O recuo começa em 100 ms, dobra até 5 s e volta ao início após conectar.
+Justificativa: enquanto o B ainda não percebeu a queda da conexão antiga, a
+nova é recusada e o A espera sem sobrecarregar o par.
+Descartada: a nova conexão substituir a antiga, que poderia oscilar entre
+as duas.
+
+**D41. Ordem de entrada no enlace.**
+O A envia o snapshot do catálogo e espera a confirmação; depois cada lado
+envia o snapshot de interesse. Só então o enlace conta como vivo para
+alterações do catálogo e novas inscrições.
+Justificativa: nenhuma alteração incremental chega antes do estado
+completo.
+Descartada: liberar o enlace logo após o Hello.
+
+**D42. Heartbeat de 250 ms nos dois sentidos, par fora após 5 s sem
+receber nada.**
+Cada lado envia `Ping` e responde `Pong`; o RTT do `LinkStatus` é a última
+amostra.
+Justificativa: a visão de interesse precisa ser renovada bem antes de 1 s;
+a detecção de falha segue os 5 s do documento.
+Descartada: média móvel do RTT, que fica para avaliação nos ensaios.
+
+**D43. Alteração sem ACK em 2 s retorna UNAVAILABLE, não é aplicada no A e
+derruba o enlace.**
+Justificativa: o B pode ter aplicado a alteração; o snapshot da reconexão
+desfaz a diferença. Sem derrubar o enlace, as versões dos dois lados
+divergiriam em silêncio.
+Descartada: manter o enlace e seguir com a próxima versão.
+
+**D44. `operation_id` aleatório de 128 bits.**
+A alteração repassada pelo B mantém o identificador gerado no B.
+Justificativa: um contador recomeçaria do zero se o A reiniciasse e
+colidiria com o histórico guardado no B.
+Descartada: contador por broker.
+
+**D45. O B aplica uma atualização só se a versão for a dele mais um.**
+Versão já aplicada ou `operation_id` já visto é confirmado sem reaplicar;
+um salto de versão é recusado e o A derruba o enlace, forçando novo
+snapshot. O B guarda os últimos 1.024 identificadores, descartados a cada
+snapshot.
+Justificativa: a ordem do TCP garante a sequência dentro de uma conexão; o
+snapshot ressincroniza entre conexões.
+Descartada: aplicar fora de ordem.
+
+**D46. Alterações do catálogo serializadas no A.**
+O snapshot enviado numa reconexão também espera a alteração em curso.
+Justificativa: a versão planejada é sempre a seguinte à atual, e o snapshot
+nunca fica entre o ACK do B e a aplicação no A.
+Descartada: alterações concorrentes com versões reservadas.
+
+**D47. O B repassa CreateTopic e DeleteTopic ao A e só responde ao cliente
+depois da resposta do A.**
+O A replica a alteração ao B antes de responder, e a resposta segue a
+atualização no mesmo fluxo; ao responder, o B já aplicou. O prazo do
+repasse é o dobro do prazo de ACK. Com o enlace fora, o B responde
+UNAVAILABLE.
+Justificativa: o cliente vê o tópico no próprio broker assim que recebe a
+confirmação.
+Descartada: o cliente abrir uma conexão com o A só para administração.
+
+**D48. O snapshot do catálogo leva os nomes apagados com a última geração.**
+O B remove os tópicos ausentes do snapshot, ou presentes com outra geração,
+e encerra as inscrições deles com `SubscriptionEnded`.
+Justificativa: a geração continua crescendo no B após uma reconexão.
+Descartada: snapshot só com os tópicos ativos.
+
+**D49. Interesse anunciado só quando o tópico passa a ter ou deixa de ter
+assinantes locais.**
+Subscribe num tópico que já tem assinantes locais confirma sem ida e volta,
+mas exige o enlace vivo. Snapshot inicial e atualizações numeradas, com
+snapshot completo a cada reconexão.
+Justificativa: o par só precisa saber se há assinantes, não quantos.
+Descartada: anunciar cada inscrição.
+
+**D50. Unsubscribe remove a inscrição local mesmo sem o ACK do par.**
+Justificativa: sem ACK o enlace cai, o par descarta a visão e recebe o
+snapshot completo na volta, então não fica interesse obsoleto.
+Descartada: responder UNAVAILABLE e manter uma inscrição que o cliente quer
+encerrar.
+
+**D51. A queda da conexão de um cliente retira o interesse em segundo
+plano.**
+Justificativa: a limpeza da conexão não espera o par.
+Descartada: retirar o interesse de forma síncrona na limpeza.
+
+**D52. A visão de interesse só é renovada depois do snapshot de interesse
+da sessão.**
+Justificativa: uma visão descartada não pode voltar a parecer recente e
+vazia antes de o par informar o estado real.
+Descartada: renovar a visão a qualquer mensagem, desde a conexão.
+
+**D53. A resposta ao Subscribe é escrita com o catálogo travado para
+leitura.**
+Justificativa: um aviso de exclusão do mesmo tópico não chega ao cliente
+antes da confirmação da inscrição. Vale também sem par.
+Descartada: responder depois de liberar o catálogo, o que deixava uma
+inscrição sem aviso de encerramento.
+
+**D54. Limitação aceita: reinício do A.**
+O catálogo fica só em memória; se o A reiniciar, o snapshot dele vem vazio
+e o B o espelha.
+Justificativa: o documento define o A como fonte do catálogo.
+Descartada: o A adotar o catálogo do B ao reiniciar, o que exigiria
+decidir qual lado está certo.
+
+**D55. Proxy TCP de testes em `internal/testproxy`.**
+Corta conexões, atrasa e descarta tráfego sem fechar as conexões.
+Justificativa: simula partições e atraso com dois brokers na mesma máquina.
+Descartada: regras de firewall do sistema operacional, que exigem
+privilégios.
