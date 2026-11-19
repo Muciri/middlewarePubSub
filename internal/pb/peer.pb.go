@@ -74,10 +74,12 @@ func (CatalogOp) EnumDescriptor() ([]byte, []int) {
 }
 
 // Primeira mensagem, enviada pelo broker administrativo ao abrir o enlace.
+// udp_port é a porta de eventos do remetente; o IP vem da conexão TCP.
 type PeerHello struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	BrokerId      string                 `protobuf:"bytes,1,opt,name=broker_id,json=brokerId,proto3" json:"broker_id,omitempty"`
 	Token         string                 `protobuf:"bytes,2,opt,name=token,proto3" json:"token,omitempty"`
+	UdpPort       uint32                 `protobuf:"varint,3,opt,name=udp_port,json=udpPort,proto3" json:"udp_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -126,11 +128,19 @@ func (x *PeerHello) GetToken() string {
 	return ""
 }
 
+func (x *PeerHello) GetUdpPort() uint32 {
+	if x != nil {
+		return x.UdpPort
+	}
+	return 0
+}
+
 type PeerHelloReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Status        Status                 `protobuf:"varint,1,opt,name=status,proto3,enum=pubsub.control.v1.Status" json:"status,omitempty"`
 	Detail        string                 `protobuf:"bytes,2,opt,name=detail,proto3" json:"detail,omitempty"`
 	BrokerId      string                 `protobuf:"bytes,3,opt,name=broker_id,json=brokerId,proto3" json:"broker_id,omitempty"`
+	UdpPort       uint32                 `protobuf:"varint,4,opt,name=udp_port,json=udpPort,proto3" json:"udp_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -186,6 +196,51 @@ func (x *PeerHelloReply) GetBrokerId() string {
 	return ""
 }
 
+func (x *PeerHelloReply) GetUdpPort() uint32 {
+	if x != nil {
+		return x.UdpPort
+	}
+	return 0
+}
+
+// Enviado pelo broker administrativo que subiu sem catálogo, antes do
+// próprio snapshot: o par responde com o catálogo dele, que é adotado.
+type CatalogSnapshotRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CatalogSnapshotRequest) Reset() {
+	*x = CatalogSnapshotRequest{}
+	mi := &file_peer_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CatalogSnapshotRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CatalogSnapshotRequest) ProtoMessage() {}
+
+func (x *CatalogSnapshotRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_peer_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CatalogSnapshotRequest.ProtoReflect.Descriptor instead.
+func (*CatalogSnapshotRequest) Descriptor() ([]byte, []int) {
+	return file_peer_proto_rawDescGZIP(), []int{2}
+}
+
 type Tombstone struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -197,7 +252,7 @@ type Tombstone struct {
 
 func (x *Tombstone) Reset() {
 	*x = Tombstone{}
-	mi := &file_peer_proto_msgTypes[2]
+	mi := &file_peer_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -209,7 +264,7 @@ func (x *Tombstone) String() string {
 func (*Tombstone) ProtoMessage() {}
 
 func (x *Tombstone) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[2]
+	mi := &file_peer_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -222,7 +277,7 @@ func (x *Tombstone) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tombstone.ProtoReflect.Descriptor instead.
 func (*Tombstone) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{2}
+	return file_peer_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Tombstone) GetName() string {
@@ -258,7 +313,7 @@ type CatalogSnapshot struct {
 
 func (x *CatalogSnapshot) Reset() {
 	*x = CatalogSnapshot{}
-	mi := &file_peer_proto_msgTypes[3]
+	mi := &file_peer_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -270,7 +325,7 @@ func (x *CatalogSnapshot) String() string {
 func (*CatalogSnapshot) ProtoMessage() {}
 
 func (x *CatalogSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[3]
+	mi := &file_peer_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -283,7 +338,7 @@ func (x *CatalogSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CatalogSnapshot.ProtoReflect.Descriptor instead.
 func (*CatalogSnapshot) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{3}
+	return file_peer_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CatalogSnapshot) GetVersion() uint64 {
@@ -316,7 +371,7 @@ type CatalogSnapshotAck struct {
 
 func (x *CatalogSnapshotAck) Reset() {
 	*x = CatalogSnapshotAck{}
-	mi := &file_peer_proto_msgTypes[4]
+	mi := &file_peer_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -328,7 +383,7 @@ func (x *CatalogSnapshotAck) String() string {
 func (*CatalogSnapshotAck) ProtoMessage() {}
 
 func (x *CatalogSnapshotAck) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[4]
+	mi := &file_peer_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -341,7 +396,7 @@ func (x *CatalogSnapshotAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CatalogSnapshotAck.ProtoReflect.Descriptor instead.
 func (*CatalogSnapshotAck) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{4}
+	return file_peer_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CatalogSnapshotAck) GetVersion() uint64 {
@@ -365,7 +420,7 @@ type CatalogUpdate struct {
 
 func (x *CatalogUpdate) Reset() {
 	*x = CatalogUpdate{}
-	mi := &file_peer_proto_msgTypes[5]
+	mi := &file_peer_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -377,7 +432,7 @@ func (x *CatalogUpdate) String() string {
 func (*CatalogUpdate) ProtoMessage() {}
 
 func (x *CatalogUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[5]
+	mi := &file_peer_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -390,7 +445,7 @@ func (x *CatalogUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CatalogUpdate.ProtoReflect.Descriptor instead.
 func (*CatalogUpdate) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{5}
+	return file_peer_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CatalogUpdate) GetOperationId() string {
@@ -433,7 +488,7 @@ type CatalogAck struct {
 
 func (x *CatalogAck) Reset() {
 	*x = CatalogAck{}
-	mi := &file_peer_proto_msgTypes[6]
+	mi := &file_peer_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -445,7 +500,7 @@ func (x *CatalogAck) String() string {
 func (*CatalogAck) ProtoMessage() {}
 
 func (x *CatalogAck) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[6]
+	mi := &file_peer_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -458,7 +513,7 @@ func (x *CatalogAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CatalogAck.ProtoReflect.Descriptor instead.
 func (*CatalogAck) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{6}
+	return file_peer_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CatalogAck) GetOperationId() string {
@@ -505,7 +560,7 @@ type ForwardCatalog struct {
 
 func (x *ForwardCatalog) Reset() {
 	*x = ForwardCatalog{}
-	mi := &file_peer_proto_msgTypes[7]
+	mi := &file_peer_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -517,7 +572,7 @@ func (x *ForwardCatalog) String() string {
 func (*ForwardCatalog) ProtoMessage() {}
 
 func (x *ForwardCatalog) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[7]
+	mi := &file_peer_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -530,7 +585,7 @@ func (x *ForwardCatalog) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardCatalog.ProtoReflect.Descriptor instead.
 func (*ForwardCatalog) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{7}
+	return file_peer_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ForwardCatalog) GetOperationId() string {
@@ -593,7 +648,7 @@ type ForwardCatalogReply struct {
 
 func (x *ForwardCatalogReply) Reset() {
 	*x = ForwardCatalogReply{}
-	mi := &file_peer_proto_msgTypes[8]
+	mi := &file_peer_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -605,7 +660,7 @@ func (x *ForwardCatalogReply) String() string {
 func (*ForwardCatalogReply) ProtoMessage() {}
 
 func (x *ForwardCatalogReply) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[8]
+	mi := &file_peer_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -618,7 +673,7 @@ func (x *ForwardCatalogReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardCatalogReply.ProtoReflect.Descriptor instead.
 func (*ForwardCatalogReply) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{8}
+	return file_peer_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ForwardCatalogReply) GetOperationId() string {
@@ -659,7 +714,7 @@ type TopicRef struct {
 
 func (x *TopicRef) Reset() {
 	*x = TopicRef{}
-	mi := &file_peer_proto_msgTypes[9]
+	mi := &file_peer_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -671,7 +726,7 @@ func (x *TopicRef) String() string {
 func (*TopicRef) ProtoMessage() {}
 
 func (x *TopicRef) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[9]
+	mi := &file_peer_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -684,7 +739,7 @@ func (x *TopicRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TopicRef.ProtoReflect.Descriptor instead.
 func (*TopicRef) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{9}
+	return file_peer_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TopicRef) GetId() uint32 {
@@ -713,7 +768,7 @@ type InterestSnapshot struct {
 
 func (x *InterestSnapshot) Reset() {
 	*x = InterestSnapshot{}
-	mi := &file_peer_proto_msgTypes[10]
+	mi := &file_peer_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -725,7 +780,7 @@ func (x *InterestSnapshot) String() string {
 func (*InterestSnapshot) ProtoMessage() {}
 
 func (x *InterestSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[10]
+	mi := &file_peer_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -738,7 +793,7 @@ func (x *InterestSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InterestSnapshot.ProtoReflect.Descriptor instead.
 func (*InterestSnapshot) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{10}
+	return file_peer_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *InterestSnapshot) GetSeq() uint64 {
@@ -766,7 +821,7 @@ type InterestUpdate struct {
 
 func (x *InterestUpdate) Reset() {
 	*x = InterestUpdate{}
-	mi := &file_peer_proto_msgTypes[11]
+	mi := &file_peer_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -778,7 +833,7 @@ func (x *InterestUpdate) String() string {
 func (*InterestUpdate) ProtoMessage() {}
 
 func (x *InterestUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[11]
+	mi := &file_peer_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -791,7 +846,7 @@ func (x *InterestUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InterestUpdate.ProtoReflect.Descriptor instead.
 func (*InterestUpdate) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{11}
+	return file_peer_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *InterestUpdate) GetSeq() uint64 {
@@ -824,7 +879,7 @@ type InterestAck struct {
 
 func (x *InterestAck) Reset() {
 	*x = InterestAck{}
-	mi := &file_peer_proto_msgTypes[12]
+	mi := &file_peer_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -836,7 +891,7 @@ func (x *InterestAck) String() string {
 func (*InterestAck) ProtoMessage() {}
 
 func (x *InterestAck) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[12]
+	mi := &file_peer_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -849,7 +904,7 @@ func (x *InterestAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InterestAck.ProtoReflect.Descriptor instead.
 func (*InterestAck) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{12}
+	return file_peer_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *InterestAck) GetSeq() uint64 {
@@ -869,7 +924,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_peer_proto_msgTypes[13]
+	mi := &file_peer_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -881,7 +936,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[13]
+	mi := &file_peer_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -894,7 +949,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{13}
+	return file_peer_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Ping) GetNonce() uint64 {
@@ -913,7 +968,7 @@ type Pong struct {
 
 func (x *Pong) Reset() {
 	*x = Pong{}
-	mi := &file_peer_proto_msgTypes[14]
+	mi := &file_peer_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -925,7 +980,7 @@ func (x *Pong) String() string {
 func (*Pong) ProtoMessage() {}
 
 func (x *Pong) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[14]
+	mi := &file_peer_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -938,7 +993,7 @@ func (x *Pong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pong.ProtoReflect.Descriptor instead.
 func (*Pong) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{14}
+	return file_peer_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Pong) GetNonce() uint64 {
@@ -965,6 +1020,7 @@ type PeerEnvelope struct {
 	//	*PeerEnvelope_InterestAck
 	//	*PeerEnvelope_Ping
 	//	*PeerEnvelope_Pong
+	//	*PeerEnvelope_CatalogSnapshotRequest
 	Body          isPeerEnvelope_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -972,7 +1028,7 @@ type PeerEnvelope struct {
 
 func (x *PeerEnvelope) Reset() {
 	*x = PeerEnvelope{}
-	mi := &file_peer_proto_msgTypes[15]
+	mi := &file_peer_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -984,7 +1040,7 @@ func (x *PeerEnvelope) String() string {
 func (*PeerEnvelope) ProtoMessage() {}
 
 func (x *PeerEnvelope) ProtoReflect() protoreflect.Message {
-	mi := &file_peer_proto_msgTypes[15]
+	mi := &file_peer_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -997,7 +1053,7 @@ func (x *PeerEnvelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PeerEnvelope.ProtoReflect.Descriptor instead.
 func (*PeerEnvelope) Descriptor() ([]byte, []int) {
-	return file_peer_proto_rawDescGZIP(), []int{15}
+	return file_peer_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PeerEnvelope) GetBody() isPeerEnvelope_Body {
@@ -1124,6 +1180,15 @@ func (x *PeerEnvelope) GetPong() *Pong {
 	return nil
 }
 
+func (x *PeerEnvelope) GetCatalogSnapshotRequest() *CatalogSnapshotRequest {
+	if x != nil {
+		if x, ok := x.Body.(*PeerEnvelope_CatalogSnapshotRequest); ok {
+			return x.CatalogSnapshotRequest
+		}
+	}
+	return nil
+}
+
 type isPeerEnvelope_Body interface {
 	isPeerEnvelope_Body()
 }
@@ -1180,6 +1245,10 @@ type PeerEnvelope_Pong struct {
 	Pong *Pong `protobuf:"bytes,13,opt,name=pong,proto3,oneof"`
 }
 
+type PeerEnvelope_CatalogSnapshotRequest struct {
+	CatalogSnapshotRequest *CatalogSnapshotRequest `protobuf:"bytes,14,opt,name=catalog_snapshot_request,json=catalogSnapshotRequest,proto3,oneof"`
+}
+
 func (*PeerEnvelope_Hello) isPeerEnvelope_Body() {}
 
 func (*PeerEnvelope_HelloReply) isPeerEnvelope_Body() {}
@@ -1206,19 +1275,24 @@ func (*PeerEnvelope_Ping) isPeerEnvelope_Body() {}
 
 func (*PeerEnvelope_Pong) isPeerEnvelope_Body() {}
 
+func (*PeerEnvelope_CatalogSnapshotRequest) isPeerEnvelope_Body() {}
+
 var File_peer_proto protoreflect.FileDescriptor
 
 const file_peer_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"peer.proto\x12\x0epubsub.peer.v1\x1a\rcontrol.proto\">\n" +
+	"peer.proto\x12\x0epubsub.peer.v1\x1a\rcontrol.proto\"Y\n" +
 	"\tPeerHello\x12\x1b\n" +
 	"\tbroker_id\x18\x01 \x01(\tR\bbrokerId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"x\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\x12\x19\n" +
+	"\budp_port\x18\x03 \x01(\rR\audpPort\"\x93\x01\n" +
 	"\x0ePeerHelloReply\x121\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x19.pubsub.control.v1.StatusR\x06status\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\x12\x1b\n" +
-	"\tbroker_id\x18\x03 \x01(\tR\bbrokerId\"O\n" +
+	"\tbroker_id\x18\x03 \x01(\tR\bbrokerId\x12\x19\n" +
+	"\budp_port\x18\x04 \x01(\rR\audpPort\"\x18\n" +
+	"\x16CatalogSnapshotRequest\"O\n" +
 	"\tTombstone\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\rR\x02id\x12\x1e\n" +
@@ -1269,7 +1343,7 @@ const file_peer_proto_rawDesc = "" +
 	"\x04Ping\x12\x14\n" +
 	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\"\x1c\n" +
 	"\x04Pong\x12\x14\n" +
-	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\"\x95\a\n" +
+	"\x05nonce\x18\x01 \x01(\x04R\x05nonce\"\xf9\a\n" +
 	"\fPeerEnvelope\x121\n" +
 	"\x05hello\x18\x01 \x01(\v2\x19.pubsub.peer.v1.PeerHelloH\x00R\x05hello\x12A\n" +
 	"\vhello_reply\x18\x02 \x01(\v2\x1e.pubsub.peer.v1.PeerHelloReplyH\x00R\n" +
@@ -1286,7 +1360,8 @@ const file_peer_proto_rawDesc = "" +
 	" \x01(\v2\x1e.pubsub.peer.v1.InterestUpdateH\x00R\x0einterestUpdate\x12@\n" +
 	"\finterest_ack\x18\v \x01(\v2\x1b.pubsub.peer.v1.InterestAckH\x00R\vinterestAck\x12*\n" +
 	"\x04ping\x18\f \x01(\v2\x14.pubsub.peer.v1.PingH\x00R\x04ping\x12*\n" +
-	"\x04pong\x18\r \x01(\v2\x14.pubsub.peer.v1.PongH\x00R\x04pongB\x06\n" +
+	"\x04pong\x18\r \x01(\v2\x14.pubsub.peer.v1.PongH\x00R\x04pong\x12b\n" +
+	"\x18catalog_snapshot_request\x18\x0e \x01(\v2&.pubsub.peer.v1.CatalogSnapshotRequestH\x00R\x16catalogSnapshotRequestB\x06\n" +
 	"\x04body*U\n" +
 	"\tCatalogOp\x12\x1a\n" +
 	"\x16CATALOG_OP_UNSPECIFIED\x10\x00\x12\x15\n" +
@@ -1306,61 +1381,63 @@ func file_peer_proto_rawDescGZIP() []byte {
 }
 
 var file_peer_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_peer_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_peer_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_peer_proto_goTypes = []any{
-	(CatalogOp)(0),              // 0: pubsub.peer.v1.CatalogOp
-	(*PeerHello)(nil),           // 1: pubsub.peer.v1.PeerHello
-	(*PeerHelloReply)(nil),      // 2: pubsub.peer.v1.PeerHelloReply
-	(*Tombstone)(nil),           // 3: pubsub.peer.v1.Tombstone
-	(*CatalogSnapshot)(nil),     // 4: pubsub.peer.v1.CatalogSnapshot
-	(*CatalogSnapshotAck)(nil),  // 5: pubsub.peer.v1.CatalogSnapshotAck
-	(*CatalogUpdate)(nil),       // 6: pubsub.peer.v1.CatalogUpdate
-	(*CatalogAck)(nil),          // 7: pubsub.peer.v1.CatalogAck
-	(*ForwardCatalog)(nil),      // 8: pubsub.peer.v1.ForwardCatalog
-	(*ForwardCatalogReply)(nil), // 9: pubsub.peer.v1.ForwardCatalogReply
-	(*TopicRef)(nil),            // 10: pubsub.peer.v1.TopicRef
-	(*InterestSnapshot)(nil),    // 11: pubsub.peer.v1.InterestSnapshot
-	(*InterestUpdate)(nil),      // 12: pubsub.peer.v1.InterestUpdate
-	(*InterestAck)(nil),         // 13: pubsub.peer.v1.InterestAck
-	(*Ping)(nil),                // 14: pubsub.peer.v1.Ping
-	(*Pong)(nil),                // 15: pubsub.peer.v1.Pong
-	(*PeerEnvelope)(nil),        // 16: pubsub.peer.v1.PeerEnvelope
-	(Status)(0),                 // 17: pubsub.control.v1.Status
-	(*TopicInfo)(nil),           // 18: pubsub.control.v1.TopicInfo
-	(*CreateTopic)(nil),         // 19: pubsub.control.v1.CreateTopic
-	(*DeleteTopic)(nil),         // 20: pubsub.control.v1.DeleteTopic
+	(CatalogOp)(0),                 // 0: pubsub.peer.v1.CatalogOp
+	(*PeerHello)(nil),              // 1: pubsub.peer.v1.PeerHello
+	(*PeerHelloReply)(nil),         // 2: pubsub.peer.v1.PeerHelloReply
+	(*CatalogSnapshotRequest)(nil), // 3: pubsub.peer.v1.CatalogSnapshotRequest
+	(*Tombstone)(nil),              // 4: pubsub.peer.v1.Tombstone
+	(*CatalogSnapshot)(nil),        // 5: pubsub.peer.v1.CatalogSnapshot
+	(*CatalogSnapshotAck)(nil),     // 6: pubsub.peer.v1.CatalogSnapshotAck
+	(*CatalogUpdate)(nil),          // 7: pubsub.peer.v1.CatalogUpdate
+	(*CatalogAck)(nil),             // 8: pubsub.peer.v1.CatalogAck
+	(*ForwardCatalog)(nil),         // 9: pubsub.peer.v1.ForwardCatalog
+	(*ForwardCatalogReply)(nil),    // 10: pubsub.peer.v1.ForwardCatalogReply
+	(*TopicRef)(nil),               // 11: pubsub.peer.v1.TopicRef
+	(*InterestSnapshot)(nil),       // 12: pubsub.peer.v1.InterestSnapshot
+	(*InterestUpdate)(nil),         // 13: pubsub.peer.v1.InterestUpdate
+	(*InterestAck)(nil),            // 14: pubsub.peer.v1.InterestAck
+	(*Ping)(nil),                   // 15: pubsub.peer.v1.Ping
+	(*Pong)(nil),                   // 16: pubsub.peer.v1.Pong
+	(*PeerEnvelope)(nil),           // 17: pubsub.peer.v1.PeerEnvelope
+	(Status)(0),                    // 18: pubsub.control.v1.Status
+	(*TopicInfo)(nil),              // 19: pubsub.control.v1.TopicInfo
+	(*CreateTopic)(nil),            // 20: pubsub.control.v1.CreateTopic
+	(*DeleteTopic)(nil),            // 21: pubsub.control.v1.DeleteTopic
 }
 var file_peer_proto_depIdxs = []int32{
-	17, // 0: pubsub.peer.v1.PeerHelloReply.status:type_name -> pubsub.control.v1.Status
-	18, // 1: pubsub.peer.v1.CatalogSnapshot.live:type_name -> pubsub.control.v1.TopicInfo
-	3,  // 2: pubsub.peer.v1.CatalogSnapshot.deleted:type_name -> pubsub.peer.v1.Tombstone
+	18, // 0: pubsub.peer.v1.PeerHelloReply.status:type_name -> pubsub.control.v1.Status
+	19, // 1: pubsub.peer.v1.CatalogSnapshot.live:type_name -> pubsub.control.v1.TopicInfo
+	4,  // 2: pubsub.peer.v1.CatalogSnapshot.deleted:type_name -> pubsub.peer.v1.Tombstone
 	0,  // 3: pubsub.peer.v1.CatalogUpdate.op:type_name -> pubsub.peer.v1.CatalogOp
-	18, // 4: pubsub.peer.v1.CatalogUpdate.topic:type_name -> pubsub.control.v1.TopicInfo
-	17, // 5: pubsub.peer.v1.CatalogAck.status:type_name -> pubsub.control.v1.Status
-	19, // 6: pubsub.peer.v1.ForwardCatalog.create:type_name -> pubsub.control.v1.CreateTopic
-	20, // 7: pubsub.peer.v1.ForwardCatalog.delete:type_name -> pubsub.control.v1.DeleteTopic
-	17, // 8: pubsub.peer.v1.ForwardCatalogReply.status:type_name -> pubsub.control.v1.Status
-	18, // 9: pubsub.peer.v1.ForwardCatalogReply.topic:type_name -> pubsub.control.v1.TopicInfo
-	10, // 10: pubsub.peer.v1.InterestSnapshot.topics:type_name -> pubsub.peer.v1.TopicRef
-	10, // 11: pubsub.peer.v1.InterestUpdate.topic:type_name -> pubsub.peer.v1.TopicRef
+	19, // 4: pubsub.peer.v1.CatalogUpdate.topic:type_name -> pubsub.control.v1.TopicInfo
+	18, // 5: pubsub.peer.v1.CatalogAck.status:type_name -> pubsub.control.v1.Status
+	20, // 6: pubsub.peer.v1.ForwardCatalog.create:type_name -> pubsub.control.v1.CreateTopic
+	21, // 7: pubsub.peer.v1.ForwardCatalog.delete:type_name -> pubsub.control.v1.DeleteTopic
+	18, // 8: pubsub.peer.v1.ForwardCatalogReply.status:type_name -> pubsub.control.v1.Status
+	19, // 9: pubsub.peer.v1.ForwardCatalogReply.topic:type_name -> pubsub.control.v1.TopicInfo
+	11, // 10: pubsub.peer.v1.InterestSnapshot.topics:type_name -> pubsub.peer.v1.TopicRef
+	11, // 11: pubsub.peer.v1.InterestUpdate.topic:type_name -> pubsub.peer.v1.TopicRef
 	1,  // 12: pubsub.peer.v1.PeerEnvelope.hello:type_name -> pubsub.peer.v1.PeerHello
 	2,  // 13: pubsub.peer.v1.PeerEnvelope.hello_reply:type_name -> pubsub.peer.v1.PeerHelloReply
-	4,  // 14: pubsub.peer.v1.PeerEnvelope.catalog_snapshot:type_name -> pubsub.peer.v1.CatalogSnapshot
-	5,  // 15: pubsub.peer.v1.PeerEnvelope.catalog_snapshot_ack:type_name -> pubsub.peer.v1.CatalogSnapshotAck
-	6,  // 16: pubsub.peer.v1.PeerEnvelope.catalog_update:type_name -> pubsub.peer.v1.CatalogUpdate
-	7,  // 17: pubsub.peer.v1.PeerEnvelope.catalog_ack:type_name -> pubsub.peer.v1.CatalogAck
-	8,  // 18: pubsub.peer.v1.PeerEnvelope.forward_catalog:type_name -> pubsub.peer.v1.ForwardCatalog
-	9,  // 19: pubsub.peer.v1.PeerEnvelope.forward_catalog_reply:type_name -> pubsub.peer.v1.ForwardCatalogReply
-	11, // 20: pubsub.peer.v1.PeerEnvelope.interest_snapshot:type_name -> pubsub.peer.v1.InterestSnapshot
-	12, // 21: pubsub.peer.v1.PeerEnvelope.interest_update:type_name -> pubsub.peer.v1.InterestUpdate
-	13, // 22: pubsub.peer.v1.PeerEnvelope.interest_ack:type_name -> pubsub.peer.v1.InterestAck
-	14, // 23: pubsub.peer.v1.PeerEnvelope.ping:type_name -> pubsub.peer.v1.Ping
-	15, // 24: pubsub.peer.v1.PeerEnvelope.pong:type_name -> pubsub.peer.v1.Pong
-	25, // [25:25] is the sub-list for method output_type
-	25, // [25:25] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	5,  // 14: pubsub.peer.v1.PeerEnvelope.catalog_snapshot:type_name -> pubsub.peer.v1.CatalogSnapshot
+	6,  // 15: pubsub.peer.v1.PeerEnvelope.catalog_snapshot_ack:type_name -> pubsub.peer.v1.CatalogSnapshotAck
+	7,  // 16: pubsub.peer.v1.PeerEnvelope.catalog_update:type_name -> pubsub.peer.v1.CatalogUpdate
+	8,  // 17: pubsub.peer.v1.PeerEnvelope.catalog_ack:type_name -> pubsub.peer.v1.CatalogAck
+	9,  // 18: pubsub.peer.v1.PeerEnvelope.forward_catalog:type_name -> pubsub.peer.v1.ForwardCatalog
+	10, // 19: pubsub.peer.v1.PeerEnvelope.forward_catalog_reply:type_name -> pubsub.peer.v1.ForwardCatalogReply
+	12, // 20: pubsub.peer.v1.PeerEnvelope.interest_snapshot:type_name -> pubsub.peer.v1.InterestSnapshot
+	13, // 21: pubsub.peer.v1.PeerEnvelope.interest_update:type_name -> pubsub.peer.v1.InterestUpdate
+	14, // 22: pubsub.peer.v1.PeerEnvelope.interest_ack:type_name -> pubsub.peer.v1.InterestAck
+	15, // 23: pubsub.peer.v1.PeerEnvelope.ping:type_name -> pubsub.peer.v1.Ping
+	16, // 24: pubsub.peer.v1.PeerEnvelope.pong:type_name -> pubsub.peer.v1.Pong
+	3,  // 25: pubsub.peer.v1.PeerEnvelope.catalog_snapshot_request:type_name -> pubsub.peer.v1.CatalogSnapshotRequest
+	26, // [26:26] is the sub-list for method output_type
+	26, // [26:26] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_peer_proto_init() }
@@ -1369,11 +1446,11 @@ func file_peer_proto_init() {
 		return
 	}
 	file_control_proto_init()
-	file_peer_proto_msgTypes[7].OneofWrappers = []any{
+	file_peer_proto_msgTypes[8].OneofWrappers = []any{
 		(*ForwardCatalog_Create)(nil),
 		(*ForwardCatalog_Delete)(nil),
 	}
-	file_peer_proto_msgTypes[15].OneofWrappers = []any{
+	file_peer_proto_msgTypes[16].OneofWrappers = []any{
 		(*PeerEnvelope_Hello)(nil),
 		(*PeerEnvelope_HelloReply)(nil),
 		(*PeerEnvelope_CatalogSnapshot)(nil),
@@ -1387,6 +1464,7 @@ func file_peer_proto_init() {
 		(*PeerEnvelope_InterestAck)(nil),
 		(*PeerEnvelope_Ping)(nil),
 		(*PeerEnvelope_Pong)(nil),
+		(*PeerEnvelope_CatalogSnapshotRequest)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1394,7 +1472,7 @@ func file_peer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_peer_proto_rawDesc), len(file_peer_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

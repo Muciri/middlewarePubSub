@@ -103,9 +103,11 @@ message LookupTopicReply {
 // generation igual a zero aceita a geração atual. Na restauração de
 // inscrições após reconexão, a biblioteca envia a geração que conhecia, e
 // uma geração diferente da atual resulta em STATUS_TOPIC_NOT_FOUND.
+// restore marca a restauração, aceita mesmo com o enlace entre brokers fora.
 message Subscribe {
   string name = 1;
   uint32 generation = 2;
+  bool restore = 3;
 }
 
 message SubscribeReply {

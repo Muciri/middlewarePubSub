@@ -773,10 +773,12 @@ func (x *LookupTopicReply) GetTopic() *TopicInfo {
 // generation igual a zero aceita a geração atual. Na restauração de
 // inscrições após reconexão, a biblioteca envia a geração que conhecia, e
 // uma geração diferente da atual resulta em STATUS_TOPIC_NOT_FOUND.
+// restore marca a restauração, aceita mesmo com o enlace entre brokers fora.
 type Subscribe struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Generation    uint32                 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
+	Restore       bool                   `protobuf:"varint,3,opt,name=restore,proto3" json:"restore,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -823,6 +825,13 @@ func (x *Subscribe) GetGeneration() uint32 {
 		return x.Generation
 	}
 	return 0
+}
+
+func (x *Subscribe) GetRestore() bool {
+	if x != nil {
+		return x.Restore
+	}
+	return false
 }
 
 type SubscribeReply struct {
@@ -1656,12 +1665,13 @@ const file_control_proto_rawDesc = "" +
 	"\x10LookupTopicReply\x121\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x19.pubsub.control.v1.StatusR\x06status\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\x122\n" +
-	"\x05topic\x18\x03 \x01(\v2\x1c.pubsub.control.v1.TopicInfoR\x05topic\"?\n" +
+	"\x05topic\x18\x03 \x01(\v2\x1c.pubsub.control.v1.TopicInfoR\x05topic\"Y\n" +
 	"\tSubscribe\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x02 \x01(\rR\n" +
-	"generation\"\x8f\x01\n" +
+	"generation\x12\x18\n" +
+	"\arestore\x18\x03 \x01(\bR\arestore\"\x8f\x01\n" +
 	"\x0eSubscribeReply\x121\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x19.pubsub.control.v1.StatusR\x06status\x12\x16\n" +
 	"\x06detail\x18\x02 \x01(\tR\x06detail\x122\n" +

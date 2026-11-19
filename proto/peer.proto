@@ -9,16 +9,23 @@ import "control.proto";
 option go_package = "github.com/franciscovmn/middlewarePubSub/internal/pb;pb";
 
 // Primeira mensagem, enviada pelo broker administrativo ao abrir o enlace.
+// udp_port é a porta de eventos do remetente; o IP vem da conexão TCP.
 message PeerHello {
   string broker_id = 1;
   string token = 2;
+  uint32 udp_port = 3;
 }
 
 message PeerHelloReply {
   pubsub.control.v1.Status status = 1;
   string detail = 2;
   string broker_id = 3;
+  uint32 udp_port = 4;
 }
+
+// Enviado pelo broker administrativo que subiu sem catálogo, antes do
+// próprio snapshot: o par responde com o catálogo dele, que é adotado.
+message CatalogSnapshotRequest {}
 
 message Tombstone {
   string name = 1;
@@ -122,5 +129,6 @@ message PeerEnvelope {
     InterestAck interest_ack = 11;
     Ping ping = 12;
     Pong pong = 13;
+    CatalogSnapshotRequest catalog_snapshot_request = 14;
   }
 }
