@@ -1,0 +1,126 @@
+// Canal entre brokers (porta 7002/TCP). Cada mensagem trafega como um
+// PeerEnvelope precedido por 4 bytes de tamanho, com quadros de até 1 MiB.
+syntax = "proto3";
+
+package pubsub.peer.v1;
+
+import "control.proto";
+
+option go_package = "github.com/franciscovmn/middlewarePubSub/internal/pb;pb";
+
+// Primeira mensagem, enviada pelo broker administrativo ao abrir o enlace.
+message PeerHello {
+  string broker_id = 1;
+  string token = 2;
+}
+
+message PeerHelloReply {
+  pubsub.control.v1.Status status = 1;
+  string detail = 2;
+  string broker_id = 3;
+}
+
+message Tombstone {
+  string name = 1;
+  uint32 id = 2;
+  uint32 generation = 3;
+}
+
+// Catálogo completo, enviado pelo broker administrativo a cada conexão.
+message CatalogSnapshot {
+  uint64 version = 1;
+  repeated pubsub.control.v1.TopicInfo live = 2;
+  repeated Tombstone deleted = 3;
+}
+
+message CatalogSnapshotAck {
+  uint64 version = 1;
+}
+
+enum CatalogOp {
+  CATALOG_OP_UNSPECIFIED = 0;
+  CATALOG_OP_CREATE = 1;
+  CATALOG_OP_DELETE = 2;
+}
+
+// Alteração versionada do catálogo. Em CATALOG_OP_DELETE, topic é a versão
+// removida.
+message CatalogUpdate {
+  string operation_id = 1;
+  uint64 version = 2;
+  CatalogOp op = 3;
+  pubsub.control.v1.TopicInfo topic = 4;
+}
+
+message CatalogAck {
+  string operation_id = 1;
+  uint64 version = 2;
+  pubsub.control.v1.Status status = 3;
+  string detail = 4;
+}
+
+// Pedido de alteração do catálogo recebido por um broker não administrativo
+// e repassado ao administrativo.
+message ForwardCatalog {
+  string operation_id = 1;
+  oneof op {
+    pubsub.control.v1.CreateTopic create = 2;
+    pubsub.control.v1.DeleteTopic delete = 3;
+  }
+}
+
+message ForwardCatalogReply {
+  string operation_id = 1;
+  pubsub.control.v1.Status status = 2;
+  string detail = 3;
+  pubsub.control.v1.TopicInfo topic = 4;
+}
+
+message TopicRef {
+  uint32 id = 1;
+  uint32 generation = 2;
+}
+
+// Versões de tópico com assinantes locais no remetente. seq inicia a
+// numeração das atualizações seguintes.
+message InterestSnapshot {
+  uint64 seq = 1;
+  repeated TopicRef topics = 2;
+}
+
+message InterestUpdate {
+  uint64 seq = 1;
+  TopicRef topic = 2;
+  bool has_subscribers = 3;
+}
+
+message InterestAck {
+  uint64 seq = 1;
+}
+
+// Ping e Pong medem o RTT e mantêm o enlace ativo.
+message Ping {
+  uint64 nonce = 1;
+}
+
+message Pong {
+  uint64 nonce = 1;
+}
+
+message PeerEnvelope {
+  oneof body {
+    PeerHello hello = 1;
+    PeerHelloReply hello_reply = 2;
+    CatalogSnapshot catalog_snapshot = 3;
+    CatalogSnapshotAck catalog_snapshot_ack = 4;
+    CatalogUpdate catalog_update = 5;
+    CatalogAck catalog_ack = 6;
+    ForwardCatalog forward_catalog = 7;
+    ForwardCatalogReply forward_catalog_reply = 8;
+    InterestSnapshot interest_snapshot = 9;
+    InterestUpdate interest_update = 10;
+    InterestAck interest_ack = 11;
+    Ping ping = 12;
+    Pong pong = 13;
+  }
+}
