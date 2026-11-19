@@ -11,10 +11,9 @@ import (
 
 func validConfig() Config {
 	return Config{
-		Brokers:        []string{"127.0.0.1:7000", "127.0.0.2:7000"},
-		Identity:       "ana",
-		Token:          "segredo",
-		PublishTimeout: time.Second,
+		Brokers:  []string{"127.0.0.1:7000", "127.0.0.2:7000"},
+		Identity: "ana",
+		Token:    "segredo",
 	}
 }
 
@@ -23,7 +22,8 @@ func TestConfigDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.HeartbeatTimeout != 5*time.Second || cfg.MaxPending != 4096 {
+	if cfg.PublishTimeout != time.Second || cfg.HeartbeatTimeout != 5*time.Second ||
+		cfg.MaxPending != 4096 || cfg.DataPlane == nil {
 		t.Fatalf("padrões incorretos: %+v", cfg)
 	}
 }
@@ -33,7 +33,7 @@ func TestConfigValidation(t *testing.T) {
 		"sem brokers":        func(c *Config) { c.Brokers = nil },
 		"broker vazio":       func(c *Config) { c.Brokers = []string{"127.0.0.1:7000", ""} },
 		"sem identidade":     func(c *Config) { c.Identity = "" },
-		"sem prazo":          func(c *Config) { c.PublishTimeout = 0 },
+		"prazo negativo":     func(c *Config) { c.PublishTimeout = -time.Second },
 		"heartbeat negativo": func(c *Config) { c.HeartbeatTimeout = -time.Second },
 		"pendentes negativo": func(c *Config) { c.MaxPending = -1 },
 	}
