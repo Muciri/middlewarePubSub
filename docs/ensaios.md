@@ -10,14 +10,13 @@ UDP.
 ## 1. Ambiente
 
 ```
-            rede "pubsub" (bridge)
- ┌───────────┬───────────┬───────────┬───────────┐
- │           │           │           │           │
- a           b        sonda-a     sonda-b
- broker A    broker B   prefere A   prefere B
- :7000 TCP   :7000 TCP  lista a,b   lista b,a
- :7001 UDP   :7001 UDP
- disca b:7002 ◄── escuta :7002
+rede "pubsub" (bridge)
+
+  a (broker A)  ----- canal 7002 ----->  b (broker B)
+  disca b:7002                           escuta :7002
+  7000/TCP, 7001/UDP                     7000/TCP, 7001/UDP
+
+  sonda-a: lista a,b (prefere A)         sonda-b: lista b,a (prefere B)
 ```
 
 - Cada broker roda no próprio contêiner, com rede, CPU e memória
@@ -63,7 +62,7 @@ Reaproveitamento nos ensaios de carga:
   de qualquer contêiner:
   ```
   docker compose exec a rede perda 0.05 udp     # 5% dos datagramas que chegam ao A
-  docker compose exec b rede atraso 20 5        # 20 ms ± 5 ms em tudo o que sai do B
+  docker compose exec b rede atraso 20 5        # 20 ms, variando 5 ms, em tudo o que sai do B
   docker compose exec a rede restaurar
   ```
 
