@@ -3,6 +3,7 @@ package peer
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"reflect"
 	"sync"
 	"testing"
@@ -103,6 +104,7 @@ type pair struct {
 	adminStore, replicaStore *fakeStore
 	proxy                    *testproxy.Proxy
 	replicaAddr              string
+	adminOverride            netip.AddrPort
 }
 
 // startPair sobe o broker não administrativo escutando e o administrativo
@@ -115,7 +117,9 @@ func startPair(t *testing.T, prepare func(p *pair)) *pair {
 	}
 
 	var err error
-	p.replica, err = New(fastConfig("B", "A", false), p.replicaStore)
+	rcfg := fastConfig("B", "A", false)
+	rcfg.EventPort = 17101
+	p.replica, err = New(rcfg, p.replicaStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +136,8 @@ func startPair(t *testing.T, prepare func(p *pair)) *pair {
 	}
 	cfg := fastConfig("A", "B", true)
 	cfg.DialAddr = p.proxy.Addr()
+	cfg.EventPort = 17201
+	cfg.PeerUDPOverride = p.adminOverride
 	p.admin, err = New(cfg, p.adminStore)
 	if err != nil {
 		t.Fatal(err)
@@ -459,4 +465,76 @@ func TestAdminRetriesUntilPeerAppears(t *testing.T) {
 	go replica.Serve(ln)
 	defer replica.Close()
 	waitAlive(t, admin, replica)
+}
+
+func TestEmptyAdminAdoptsPeerCatalog(t *testing.T) {
+	p := startPair(t, func(p *pair) {
+		c := p.replicaStore.catalog
+		c.Create(topic.Spec{Name: "sala-1/lances", Kind: topic.KindEphemeral})
+		c.Create(topic.Spec{Name: "sala-1/placar", Kind: topic.KindState})
+		c.Delete("sala-1/lances")
+	})
+	want := p.replicaStore.catalog.Snapshot()
+	if got := p.adminStore.catalog.Snapshot(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("catálogo adotado = %+v, esperado %+v", got, want)
+	}
+	if !p.admin.Synced() || !p.replica.Synced() {
+		t.Fatal("os dois lados deveriam estar sincronizados")
+	}
+	recreated, err := p.adminStore.catalog.PlanCreate(topic.Spec{Name: "sala-1/lances", Kind: topic.KindEphemeral})
+	if err != nil || recreated.ID != 1 || recreated.Generation != 2 {
+		t.Fatalf("recriação após adoção = %+v, %v", recreated, err)
+	}
+}
+
+func TestAdoptionHappensOnlyOnce(t *testing.T) {
+	p := startPair(t, nil)
+	u := planCreate(t, p.adminStore, "sala")
+	if err := p.admin.Replicate(u); err != nil {
+		t.Fatal(err)
+	}
+	p.adminStore.catalog.Put(u.Topic, u.Version)
+	p.replicaStore.catalog.Restore(topic.Snapshot{})
+
+	p.proxy.Cut()
+	waitDown(t, p.admin, p.replica)
+	p.proxy.Restore()
+	waitAlive(t, p.admin, p.replica)
+	if _, ok := p.replicaStore.catalog.Lookup("sala"); !ok {
+		t.Fatal("na reconexão o administrativo deveria enviar o próprio catálogo")
+	}
+}
+
+func TestNotSyncedBeforeFirstSnapshot(t *testing.T) {
+	l, err := New(fastConfig("B", "A", false), newFakeStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if l.Synced() {
+		t.Fatal("broker recém criado não está sincronizado")
+	}
+}
+
+func TestPeerUDPLearnedFromHandshake(t *testing.T) {
+	p := startPair(t, nil)
+	if got, want := p.admin.Link().PeerUDP, netip.MustParseAddrPort("127.0.0.1:17101"); got != want {
+		t.Fatalf("UDP do par no administrativo = %v, esperado %v", got, want)
+	}
+	if got, want := p.replica.Link().PeerUDP, netip.MustParseAddrPort("127.0.0.1:17201"); got != want {
+		t.Fatalf("UDP do par no outro = %v, esperado %v", got, want)
+	}
+}
+
+func TestPeerUDPOverride(t *testing.T) {
+	override := netip.MustParseAddrPort("10.0.0.9:9001")
+	p := startPair(t, func(p *pair) { p.adminOverride = override })
+	if got := p.admin.Link().PeerUDP; got != override {
+		t.Fatalf("UDP do par = %v, esperado a sobrescrita %v", got, override)
+	}
+	p.proxy.Cut()
+	waitDown(t, p.admin)
+	if got := p.admin.Link().PeerUDP; got != override {
+		t.Fatalf("endereço deveria permanecer após a queda: %v", got)
+	}
 }

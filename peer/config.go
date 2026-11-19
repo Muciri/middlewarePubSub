@@ -6,6 +6,7 @@ package peer
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/franciscovmn/middlewarePubSub/internal/pb"
@@ -32,6 +33,10 @@ type Config struct {
 	DialAddr string
 	// Token é um segredo compartilhado opcional conferido no PeerHello.
 	Token string
+	// EventPort é a porta UDP local informada ao par no handshake.
+	EventPort uint16
+	// PeerUDPOverride, se válido, substitui o endereço UDP aprendido do par.
+	PeerUDPOverride netip.AddrPort
 
 	HeartbeatInterval time.Duration
 	// DeadAfter é o silêncio que caracteriza o par como fora.
@@ -107,10 +112,13 @@ type Result struct {
 
 // Store é o estado local que o enlace lê e altera; o broker o implementa.
 type Store interface {
-	// CatalogSnapshot é chamado no broker administrativo a cada conexão.
+	// CatalogSnapshot é chamado no broker administrativo a cada conexão e,
+	// no outro, quando o administrativo sobe sem catálogo.
 	CatalogSnapshot() topic.Snapshot
-	// CatalogVersion, ApplyUpdate e ApplySnapshot são chamados no broker
-	// não administrativo.
+	// CatalogVersion é chamado nos dois; zero no administrativo indica que
+	// ele subiu sem catálogo e deve adotar o do par. ApplyUpdate é chamado
+	// no broker não administrativo; ApplySnapshot nele e no administrativo,
+	// ao adotar o catálogo do par.
 	CatalogVersion() uint64
 	ApplyUpdate(u Update) error
 	ApplySnapshot(s topic.Snapshot) error

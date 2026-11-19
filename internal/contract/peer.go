@@ -1,6 +1,7 @@
 package contract
 
 import (
+	"net/netip"
 	"sync"
 	"time"
 
@@ -92,10 +93,14 @@ func (m *MemoryInterest) RemoteInterest(ref topic.Ref) Interest {
 
 // LinkStatus descreve o enlace TCP com o par. RTT é a última medida pelo
 // heartbeat, usada para descontar RTT/2 da validade no encaminhamento.
+// PeerUDP é o destino dos eventos encaminhados ao par: o IP da conexão do
+// enlace com a porta informada pelo par, ou o endereço configurado como
+// sobrescrita. Permanece com o último valor conhecido após a queda.
 type LinkStatus struct {
-	Alive bool
-	Since time.Time
-	RTT   time.Duration
+	Alive   bool
+	Since   time.Time
+	RTT     time.Duration
+	PeerUDP netip.AddrPort
 }
 
 type LinkState interface {

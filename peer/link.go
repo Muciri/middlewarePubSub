@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -30,9 +31,13 @@ type Link struct {
 	interest *contract.MemoryInterest
 	applied  *opSet
 
-	mu        sync.Mutex
-	sess      *session
-	status    contract.LinkStatus
+	mu     sync.Mutex
+	sess   *session
+	status contract.LinkStatus
+	// synced indica que o catálogo local já foi sincronizado com o par ao
+	// menos uma vez: adotado ou enviado, no administrativo; recebido, no
+	// outro.
+	synced    bool
 	closed    bool
 	listeners map[net.Listener]struct{}
 	stop      chan struct{}
@@ -140,7 +145,7 @@ func (l *Link) dial() (*session, error) {
 	}
 
 	if err := wc.Send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_Hello{Hello: &pb.PeerHello{
-		BrokerId: l.cfg.LocalID, Token: l.cfg.Token,
+		BrokerId: l.cfg.LocalID, Token: l.cfg.Token, UdpPort: uint32(l.cfg.EventPort),
 	}}}); err != nil {
 		return fail(err)
 	}
@@ -159,8 +164,11 @@ func (l *Link) dial() (*session, error) {
 	}
 
 	s := newSession(l, wc)
-	if err := l.attach(s); err != nil {
+	if err := l.attach(s, l.peerUDP(nc.RemoteAddr(), reply.GetUdpPort())); err != nil {
 		return fail(err)
+	}
+	if err := l.adoptIfNeeded(s); err != nil {
+		return nil, s.abort(err)
 	}
 	snap := l.store.CatalogSnapshot()
 	if err := wc.Send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_CatalogSnapshot{CatalogSnapshot: snapshotToProto(snap)}}); err != nil {
@@ -172,7 +180,63 @@ func (l *Link) dial() (*session, error) {
 	if ack := env.GetCatalogSnapshotAck(); ack == nil || ack.GetVersion() != snap.Version {
 		return nil, s.abort(fmt.Errorf("%w: snapshot não confirmado", ErrRejected))
 	}
+	l.setSynced()
 	return s, nil
+}
+
+// Synced informa se o catálogo local já foi sincronizado com o par. Antes
+// disso o catálogo de um broker recém iniciado está vazio e não deve ser
+// usado para recusar inscrições.
+func (l *Link) Synced() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.synced
+}
+
+func (l *Link) setSynced() {
+	l.mu.Lock()
+	l.synced = true
+	l.mu.Unlock()
+}
+
+// adoptIfNeeded faz o broker administrativo que subiu sem catálogo adotar
+// o catálogo do par, com os nomes apagados, antes de enviar o próprio.
+// Enquanto isso não acontece o enlace não fica vivo, e alterações
+// administrativas recebem UNAVAILABLE.
+func (l *Link) adoptIfNeeded(s *session) error {
+	if l.Synced() || l.store.CatalogVersion() != 0 {
+		return nil
+	}
+	if err := s.send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_CatalogSnapshotRequest{
+		CatalogSnapshotRequest: &pb.CatalogSnapshotRequest{},
+	}}); err != nil {
+		return err
+	}
+	env := &pb.PeerEnvelope{}
+	if err := s.wc.Receive(env); err != nil {
+		return err
+	}
+	m := env.GetCatalogSnapshot()
+	if m == nil {
+		return fmt.Errorf("%w: esperado o catálogo do par", ErrRejected)
+	}
+	snap, err := snapshotFromProto(m)
+	if err == nil {
+		err = l.store.ApplySnapshot(snap)
+	}
+	return err
+}
+
+// peerUDP monta o endereço de eventos do par a partir da conexão do enlace.
+func (l *Link) peerUDP(remote net.Addr, port uint32) netip.AddrPort {
+	if l.cfg.PeerUDPOverride.IsValid() {
+		return l.cfg.PeerUDPOverride
+	}
+	ap, err := netip.ParseAddrPort(remote.String())
+	if err != nil || port == 0 || port > 65535 {
+		return netip.AddrPort{}
+	}
+	return netip.AddrPortFrom(ap.Addr().Unmap(), uint16(port))
 }
 
 // Serve aceita conexões do par até Close.
@@ -236,12 +300,12 @@ func (l *Link) accept(nc net.Conn) {
 		return
 	}
 	s := newSession(l, wc)
-	if err := l.attach(s); err != nil {
+	if err := l.attach(s, l.peerUDP(nc.RemoteAddr(), hello.GetUdpPort())); err != nil {
 		reject(pb.Status_STATUS_SESSION_CONFLICT, "já existe conexão com o par")
 		return
 	}
 	if err := wc.Send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_HelloReply{HelloReply: &pb.PeerHelloReply{
-		Status: pb.Status_STATUS_OK, BrokerId: l.cfg.LocalID,
+		Status: pb.Status_STATUS_OK, BrokerId: l.cfg.LocalID, UdpPort: uint32(l.cfg.EventPort),
 	}}}); err != nil {
 		s.abort(err)
 		return
@@ -250,6 +314,18 @@ func (l *Link) accept(nc net.Conn) {
 	if err := wc.Receive(env); err != nil {
 		s.abort(err)
 		return
+	}
+	if env.GetCatalogSnapshotRequest() != nil {
+		err := wc.Send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_CatalogSnapshot{
+			CatalogSnapshot: snapshotToProto(l.store.CatalogSnapshot()),
+		}})
+		if err == nil {
+			err = wc.Receive(env)
+		}
+		if err != nil {
+			s.abort(err)
+			return
+		}
 	}
 	m := env.GetCatalogSnapshot()
 	if m == nil {
@@ -265,6 +341,7 @@ func (l *Link) accept(nc net.Conn) {
 		return
 	}
 	l.applied.reset()
+	l.setSynced()
 	if err := wc.Send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_CatalogSnapshotAck{CatalogSnapshotAck: &pb.CatalogSnapshotAck{
 		Version: snap.Version,
 	}}}); err != nil {
@@ -275,7 +352,7 @@ func (l *Link) accept(nc net.Conn) {
 }
 
 // attach registra a sessão como a conexão com o par.
-func (l *Link) attach(s *session) error {
+func (l *Link) attach(s *session, peerUDP netip.AddrPort) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	switch {
@@ -285,6 +362,9 @@ func (l *Link) attach(s *session) error {
 		return fmt.Errorf("%w: conexão duplicada", ErrRejected)
 	}
 	l.sess = s
+	if peerUDP.IsValid() {
+		l.status.PeerUDP = peerUDP
+	}
 	return nil
 }
 
