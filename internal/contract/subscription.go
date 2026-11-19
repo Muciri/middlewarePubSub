@@ -123,6 +123,40 @@ func (t *SubscriptionTable) RemoveTopic(id topic.ID) []Subscription {
 	return removed
 }
 
+// RemoveRef remove as inscrições de uma versão do tópico.
+func (t *SubscriptionTable) RemoveRef(ref topic.Ref) []Subscription {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var removed []Subscription
+	for _, sub := range t.byTopic[ref] {
+		close(sub.done)
+		removed = append(removed, sub)
+	}
+	delete(t.byTopic, ref)
+	sortByID(removed)
+	return removed
+}
+
+// Refs devolve as versões de tópico com ao menos uma inscrição local, base
+// do anúncio de interesse ao par.
+func (t *SubscriptionTable) Refs() []topic.Ref {
+	t.mu.RLock()
+	out := make([]topic.Ref, 0, len(t.byTopic))
+	for ref := range t.byTopic {
+		out = append(out, ref)
+	}
+	t.mu.RUnlock()
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ID != out[j].ID {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Generation < out[j].Generation
+	})
+	return out
+}
+
 func (t *SubscriptionTable) ForTopic(ref topic.Ref) []Subscription {
 	t.mu.RLock()
 	subs := t.byTopic[ref]

@@ -168,3 +168,34 @@ func TestDoneSharedByRepeatedAdd(t *testing.T) {
 		t.Fatal("as duas cópias deveriam observar o fechamento")
 	}
 }
+
+func TestRemoveRefKeepsOtherGenerations(t *testing.T) {
+	st := NewSubscriptionTable()
+	old, _ := st.Add(Session{ID: 1}, info(1, 1))
+	st.Add(Session{ID: 2}, info(1, 2))
+
+	if removed := st.RemoveRef(info(1, 1).Ref); len(removed) != 1 {
+		t.Fatalf("removidas %d inscrições", len(removed))
+	}
+	if !isClosed(old.Done()) {
+		t.Fatal("Done não foi fechado")
+	}
+	if st.HasLocal(info(1, 1).Ref) || !st.HasLocal(info(1, 2).Ref) {
+		t.Fatal("RemoveRef afetou a geração errada")
+	}
+}
+
+func TestRefsListsTopicsWithSubscribers(t *testing.T) {
+	st := NewSubscriptionTable()
+	st.Add(Session{ID: 1}, info(2, 1))
+	st.Add(Session{ID: 2}, info(1, 3))
+	st.Add(Session{ID: 3}, info(1, 3))
+	st.Add(Session{ID: 1}, info(4, 1))
+	st.Remove(1, info(4, 1).Ref)
+
+	got := st.Refs()
+	want := []topic.Ref{{ID: 1, Generation: 3}, {ID: 2, Generation: 1}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Refs() = %v, esperado %v", got, want)
+	}
+}
