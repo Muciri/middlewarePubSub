@@ -1,0 +1,103 @@
+# Ambiente dos ensaios: brokers A e B em contêineres separados, com rede,
+# CPU e memória próprias, e duas sondas de controle. Os valores entre ${}
+# podem vir do ambiente ou de um arquivo .env (veja scripts/ensaio.env).
+#
+# Em cada contêiner as portas internas são as do documento (7000/TCP de
+# comandos, 7001/UDP de eventos, 7002/TCP entre brokers). As portas
+# publicadas no host são parametrizáveis, para clientes de carga rodando
+# fora do Docker.
+
+x-broker: &broker
+  image: ${IMAGEM:-pubsub-middleware:ensaio}
+  cap_add: [NET_ADMIN]
+  restart: "no"
+  stop_grace_period: 3s
+  volumes:
+    - ./${CREDENCIAIS:-config/credentials.ensaio.json}:/etc/pubsub/credentials.json:ro
+  networks: [pubsub]
+
+x-sonda: &sonda
+  image: ${IMAGEM:-pubsub-middleware:ensaio}
+  cap_add: [NET_ADMIN]
+  restart: "no"
+  networks: [pubsub]
+  depends_on: [a, b]
+
+services:
+  a:
+    <<: *broker
+    build: .
+    hostname: a
+    command:
+      - broker
+      - -id=A
+      - -listen=:7000
+      - -udp-port=7001
+      - -credentials=/etc/pubsub/credentials.json
+      - -peer-id=B
+      - -peer-admin
+      - -peer-addr=b:7002
+      - -peer-token=${TOKEN_PAR:-ensaio-par}
+      - -log-format=${LOG_FORMATO:-text}
+      - -log-level=${LOG_NIVEL:-info}
+    ports:
+      - "${A_PORTA_TCP:-7000}:7000/tcp"
+      - "${A_PORTA_UDP:-7001}:7001/udp"
+    cpus: ${A_CPUS:-1}
+    mem_limit: ${A_MEMORIA:-256m}
+
+  b:
+    <<: *broker
+    hostname: b
+    command:
+      - broker
+      - -id=B
+      - -listen=:7000
+      - -udp-port=7001
+      - -credentials=/etc/pubsub/credentials.json
+      - -peer-id=A
+      - -peer-listen=:7002
+      - -peer-token=${TOKEN_PAR:-ensaio-par}
+      - -log-format=${LOG_FORMATO:-text}
+      - -log-level=${LOG_NIVEL:-info}
+    ports:
+      - "${B_PORTA_TCP:-7100}:7000/tcp"
+      - "${B_PORTA_UDP:-7101}:7001/udp"
+    cpus: ${B_CPUS:-1}
+    mem_limit: ${B_MEMORIA:-256m}
+
+  # Prefere o A e passa ao B em caso de falha.
+  sonda-a:
+    <<: *sonda
+    hostname: sonda-a
+    environment:
+      SONDA_BROKERS: a:7000,b:7000
+      SONDA_ID: sonda-a
+      SONDA_TOKEN: ensaio-sonda-a
+    command:
+      - sonda
+      - observar
+      - -topicos=${TOPICOS:-sala-1/lances,sala-1/reacoes,sala-1/placar=estado}
+      - -silencio=${SILENCIO:-5s}
+      - -log-format=${LOG_FORMATO:-text}
+      - -log-level=${LOG_NIVEL:-info}
+
+  # Prefere o B e passa ao A em caso de falha.
+  sonda-b:
+    <<: *sonda
+    hostname: sonda-b
+    environment:
+      SONDA_BROKERS: b:7000,a:7000
+      SONDA_ID: sonda-b
+      SONDA_TOKEN: ensaio-sonda-b
+    command:
+      - sonda
+      - observar
+      - -topicos=${TOPICOS:-sala-1/lances,sala-1/reacoes,sala-1/placar=estado}
+      - -silencio=${SILENCIO:-5s}
+      - -log-format=${LOG_FORMATO:-text}
+      - -log-level=${LOG_NIVEL:-info}
+
+networks:
+  pubsub:
+    driver: bridge
