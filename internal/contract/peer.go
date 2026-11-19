@@ -24,6 +24,11 @@ func (i Interest) Fresh(now time.Time, maxAge time.Duration) bool {
 	return !i.UpdatedAt.IsZero() && now.Sub(i.UpdatedAt) < maxAge
 }
 
+// InterestView é consultada na admissão. A visão é descartada quando o
+// enlace cai, então a idade dela já reflete o estado do enlace: NO_SUBSCRIBERS
+// exige ausência local e visão recente sem assinantes; visão antiga ou
+// inexistente leva a UNAVAILABLE. Sem par configurado, a visão é sempre
+// recente e vazia.
 type InterestView interface {
 	RemoteInterest(ref topic.Ref) Interest
 }
