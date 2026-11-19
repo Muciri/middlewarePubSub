@@ -370,15 +370,56 @@ antes da confirmação da inscrição. Vale também sem par.
 Descartada: responder depois de liberar o catálogo, o que deixava uma
 inscrição sem aviso de encerramento.
 
-**D54. Limitação aceita: reinício do A.**
-O catálogo fica só em memória; se o A reiniciar, o snapshot dele vem vazio
-e o B o espelha.
-Justificativa: o documento define o A como fonte do catálogo.
-Descartada: o A adotar o catálogo do B ao reiniciar, o que exigiria
-decidir qual lado está certo.
+**D54. O A que sobe sem catálogo adota o catálogo do B.**
+Na primeira conexão, se a versão do catálogo local é zero, o A pede o
+snapshot ao B (`CatalogSnapshotRequest`) e o adota, com os nomes apagados e
+a última geração de cada um, antes de enviar o próprio snapshot. Até lá o
+enlace não fica vivo e as alterações administrativas recebem UNAVAILABLE.
+A adoção acontece uma vez por execução; nas reconexões seguintes o A volta
+a enviar o próprio catálogo. Tópicos, gerações e inscrições do B
+sobrevivem ao reinício do A, e recriar um nome continua a geração.
+Justificativa: o catálogo fica só em memória; sem a adoção, o B espelharia
+o catálogo vazio do A reiniciado e encerraria todas as inscrições.
+Descartada: o B espelhar o catálogo vazio do A; persistir o catálogo em
+disco.
+Limitação: se os dois reiniciarem antes de se sincronizarem, o catálogo se
+perde.
 
 **D55. Proxy TCP de testes em `internal/testproxy`.**
 Corta conexões, atrasa e descarta tráfego sem fechar as conexões.
 Justificativa: simula partições e atraso com dois brokers na mesma máquina.
 Descartada: regras de firewall do sistema operacional, que exigem
 privilégios.
+
+## Ajustes antes da reconexão do cliente
+
+**D56. Cada broker informa a própria porta UDP no handshake do canal entre
+brokers.**
+O IP vem da conexão TCP do enlace; `-peer-udp-addr` sobrescreve o endereço
+inteiro. O endereço fica em `LinkStatus.PeerUDP`, exposto por `Contracts()`,
+e mantém o último valor conhecido após a queda do enlace.
+Justificativa: o plano de dados encaminha eventos ao par sem configuração
+duplicada; a sobrescrita cobre NAT e contêineres com portas mapeadas.
+Descartada: configurar o endereço UDP do par sempre à mão.
+
+**D57. Broker com par responde UNAVAILABLE a LookupTopic e Subscribe até a
+primeira sincronização do catálogo.**
+No A, a sincronização é a adoção ou o envio do snapshot; no B, o
+recebimento do snapshot.
+Justificativa: um broker recém iniciado tem o catálogo vazio, e responder
+TOPIC_NOT_FOUND levaria o cliente a encerrar como apagada uma inscrição de
+tópico que existe.
+Descartada: responder pelo catálogo vazio.
+
+**D58. A restauração de inscrições é aceita com o enlace entre brokers
+fora.**
+O Subscribe leva `restore = true` na restauração. O broker registra a
+inscrição localmente e o interesse segue ao par no snapshot de interesse
+quando o enlace voltar. Inscrições novas continuam recebendo UNAVAILABLE
+com o enlace fora.
+Justificativa: no failover típico o A caiu e o enlace está fora; recusar a
+restauração deixaria os assinantes parados justamente no cenário de falha.
+Sem enlace não há encaminhamento entre brokers, e a visão do par é
+reenviada por completo na volta, então não há interesse obsoleto.
+Descartada: tentar a restauração até o enlace voltar; fechar a inscrição
+com erro.
