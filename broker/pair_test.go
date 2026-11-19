@@ -343,3 +343,100 @@ func TestSilentPartitionIsDetectedAndHealed(t *testing.T) {
 	waitLinked(t, p.a, p.b)
 	expect(t, ca.call(createTopic("sala", ephemeral)), pb.Status_STATUS_OK)
 }
+
+func restore(name string, gen uint32) *pb.Envelope {
+	return &pb.Envelope{Body: &pb.Envelope_Subscribe{Subscribe: &pb.Subscribe{Name: name, Generation: gen, Restore: true}}}
+}
+
+func TestRestartedAdminAdoptsPeerCatalog(t *testing.T) {
+	p := startPair(t)
+	ca := login(t, p.addrA, "ana", 1)
+	cb := login(t, p.addrB, "bia", 2)
+	ca.call(createTopic("sala-1/lances", ephemeral))
+	ca.call(createTopic("sala-1/placar", pb.TopicKind_TOPIC_KIND_STATE))
+	ca.call(createTopic("sala-1/reacoes", ephemeral))
+	ca.call(deleteTopic("sala-1/reacoes"))
+	expect(t, cb.call(subscribe("sala-1/placar", 0)), pb.Status_STATUS_OK)
+	before := p.b.catalog.Snapshot()
+
+	p.a.Close()
+	waitUnlinked(t, p.b)
+	a2, addrA2 := startBroker(t, Config{ID: "A", Peer: fastPeer("B", true, p.proxy.Addr())})
+	waitLinked(t, a2, p.b)
+
+	if got := a2.catalog.Snapshot(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("catálogo do A reiniciado = %+v, esperado %+v", got, before)
+	}
+	if got := p.b.catalog.Snapshot(); !reflect.DeepEqual(got, before) {
+		t.Fatalf("catálogo do B mudou: %+v", got)
+	}
+	placar := topic.Ref{ID: 2, Generation: 1}
+	if !p.b.Contracts().Subscriptions.HasLocal(placar) {
+		t.Fatal("inscrição do B não sobreviveu ao reinício do A")
+	}
+	expect(t, cb.call(lookupTopic("sala-1/placar")), pb.Status_STATUS_OK)
+	if len(cb.pushes) != 0 {
+		t.Fatalf("assinante do B recebeu avisos: %v", cb.pushes)
+	}
+	eventually(t, func() bool { return a2.Contracts().Interest.RemoteInterest(placar).HasSubscribers }, "interesse do B no A reiniciado")
+
+	recreated := login(t, addrA2, "ana", 3).call(createTopic("sala-1/reacoes", ephemeral)).GetCreateTopicReply().GetTopic()
+	if recreated.GetId() != 3 || recreated.GetGeneration() != 2 {
+		t.Fatalf("recriado no A reiniciado = %v", recreated)
+	}
+	fresh := login(t, addrA2, "ana", 4).call(createTopic("sala-2/lances", ephemeral)).GetCreateTopicReply().GetTopic()
+	if fresh.GetId() != 4 || fresh.GetGeneration() != 1 {
+		t.Fatalf("tópico novo no A reiniciado = %v", fresh)
+	}
+	expect(t, cb.call(lookupTopic("sala-2/lances")), pb.Status_STATUS_OK)
+}
+
+func TestUnsyncedBrokerAnswersUnavailable(t *testing.T) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	a, addrA := startBroker(t, Config{ID: "A", Peer: fastPeer("B", true, "127.0.0.1:1")})
+	b, addrB := startReplica(t, ln)
+	for _, addr := range []string{addrA, addrB} {
+		c := login(t, addr, "ana", 1)
+		expect(t, c.call(lookupTopic("sala")), pb.Status_STATUS_UNAVAILABLE)
+		expect(t, c.call(restore("sala", 1)), pb.Status_STATUS_UNAVAILABLE)
+		expect(t, c.call(createTopic("sala", ephemeral)), pb.Status_STATUS_UNAVAILABLE)
+	}
+	if a.catalogReady() || b.catalogReady() {
+		t.Fatal("brokers sem sincronização não deveriam responder pelo catálogo")
+	}
+}
+
+func TestRestoreAcceptedWhileLinkDown(t *testing.T) {
+	p := startPair(t)
+	ca := login(t, p.addrA, "ana", 1)
+	ca.call(createTopic("sala", ephemeral))
+	ca.call(createTopic("outra", ephemeral))
+	ca.call(deleteTopic("outra"))
+	ca.call(createTopic("outra", ephemeral))
+
+	p.proxy.Cut()
+	waitUnlinked(t, p.a, p.b)
+	cb := login(t, p.addrB, "bia", 2)
+	expect(t, cb.call(subscribe("sala", 0)), pb.Status_STATUS_UNAVAILABLE)
+	expect(t, cb.call(restore("sala", 1)), pb.Status_STATUS_OK)
+	expect(t, cb.call(restore("outra", 1)), pb.Status_STATUS_TOPIC_NOT_FOUND)
+
+	ref := topic.Ref{ID: 1, Generation: 1}
+	p.proxy.Restore()
+	waitLinked(t, p.a, p.b)
+	eventually(t, func() bool { return p.a.Contracts().Interest.RemoteInterest(ref).HasSubscribers }, "interesse restaurado chega ao par")
+}
+
+func TestContractsExposePeerUDP(t *testing.T) {
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	b, _ := startBroker(t, Config{ID: "B", EventPort: 17301, Peer: fastPeer("A", false, "")})
+	go b.ServePeer(ln)
+	a, _ := startBroker(t, Config{ID: "A", EventPort: 17401, Peer: fastPeer("B", true, ln.Addr().String())})
+	waitLinked(t, a, b)
+	if got := a.Contracts().Link.Link().PeerUDP.String(); got != "127.0.0.1:17301" {
+		t.Fatalf("UDP do B visto pelo A = %s", got)
+	}
+	if got := b.Contracts().Link.Link().PeerUDP.String(); got != "127.0.0.1:17401" {
+		t.Fatalf("UDP do A visto pelo B = %s", got)
+	}
+}

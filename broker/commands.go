@@ -94,6 +94,9 @@ func (c *clientConn) deleteTopic(req *pb.Envelope, m *pb.DeleteTopic) *pb.Envelo
 }
 
 func (c *clientConn) lookupTopic(req *pb.Envelope, m *pb.LookupTopic) *pb.Envelope {
+	if !c.b.catalogReady() {
+		return failure(req, pb.Status_STATUS_UNAVAILABLE, "catálogo ainda não sincronizado com o par")
+	}
 	info, ok := c.b.catalog.Lookup(m.GetName())
 	if !ok {
 		return failure(req, pb.Status_STATUS_TOPIC_NOT_FOUND, "tópico não encontrado")
@@ -108,12 +111,20 @@ func (c *clientConn) lookupTopic(req *pb.Envelope, m *pb.LookupTopic) *pb.Envelo
 // cliente só depois do ACK. A resposta é escrita com a leitura do catálogo
 // ainda travada, para que um aviso de exclusão do mesmo tópico não chegue
 // ao cliente antes da confirmação.
+//
+// A restauração após reconexão é aceita com o enlace fora: o interesse
+// segue no snapshot de interesse quando o enlace voltar.
 func (c *clientConn) subscribe(req *pb.Envelope, m *pb.Subscribe) (*pb.Envelope, func()) {
 	b := c.b
+	if !b.catalogReady() {
+		return failure(req, pb.Status_STATUS_UNAVAILABLE, "catálogo ainda não sincronizado com o par"), nil
+	}
+	alive := false
 	if b.link != nil {
 		b.interestMu.Lock()
 		defer b.interestMu.Unlock()
-		if !b.link.Link().Alive {
+		alive = b.link.Link().Alive
+		if !alive && !m.GetRestore() {
 			return failure(req, pb.Status_STATUS_UNAVAILABLE, "enlace com o par indisponível"), nil
 		}
 	}
@@ -129,12 +140,12 @@ func (c *clientConn) subscribe(req *pb.Envelope, m *pb.Subscribe) (*pb.Envelope,
 	reply := &pb.Envelope{Body: &pb.Envelope_SubscribeReply{SubscribeReply: &pb.SubscribeReply{
 		Status: pb.Status_STATUS_OK, Topic: protoconv.TopicInfoToProto(info),
 	}}}
-	if b.link == nil || had {
+	if b.link == nil || had || !alive {
 		return reply, b.topicMu.RUnlock
 	}
 	b.topicMu.RUnlock()
 
-	if err := b.link.Announce(info.Ref, true); err != nil {
+	if err := b.link.Announce(info.Ref, true); err != nil && !m.GetRestore() {
 		b.subs.Remove(c.session.ID, info.Ref)
 		return failure(req, pb.Status_STATUS_UNAVAILABLE, "par não confirmou a inscrição"), nil
 	}

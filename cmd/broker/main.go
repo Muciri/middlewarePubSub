@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,6 +36,7 @@ func main() {
 		peerAddr   = flag.String("peer-addr", "", "endereço do canal entre brokers do par (broker administrativo)")
 		peerListen = flag.String("peer-listen", fmt.Sprintf(":%d", peer.DefaultPort), "endereço do canal entre brokers (outro broker)")
 		peerToken  = flag.String("peer-token", "", "segredo compartilhado entre os brokers")
+		peerUDP    = flag.String("peer-udp-addr", "", "sobrescreve o endereço UDP de eventos do par, informado por ele no handshake")
 	)
 	flag.Parse()
 
@@ -53,6 +55,13 @@ func main() {
 	}
 	if *peerID != "" {
 		cfg.Peer = &peer.Config{PeerID: *peerID, Admin: *peerAdmin, DialAddr: *peerAddr, Token: *peerToken}
+		if *peerUDP != "" {
+			ap, err := netip.ParseAddrPort(*peerUDP)
+			if err != nil {
+				log.Fatalf("endereço UDP do par inválido: %v", err)
+			}
+			cfg.Peer.PeerUDPOverride = ap
+		}
 	}
 	b, err := broker.New(cfg)
 	if err != nil {

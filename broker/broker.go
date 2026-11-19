@@ -79,6 +79,7 @@ func New(cfg Config) (*Broker, error) {
 	if cfg.Peer != nil {
 		pc := *cfg.Peer
 		pc.LocalID = cfg.ID
+		pc.EventPort = cfg.EventPort
 		link, err := peer.New(pc, peerStore{b})
 		if err != nil {
 			return nil, err
@@ -108,6 +109,13 @@ func (b *Broker) ListenAndServePeer(addr string) error {
 		return err
 	}
 	return b.ServePeer(ln)
+}
+
+// catalogReady informa se o catálogo local pode responder consultas. Com
+// par, um broker recém iniciado espera a primeira sincronização; antes
+// disso, um tópico ausente não significa tópico apagado.
+func (b *Broker) catalogReady() bool {
+	return b.link == nil || b.link.Synced()
 }
 
 func (b *Broker) Contracts() Contracts {
