@@ -4,9 +4,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/franciscovmn/middlewarePubSub/internal/contract"
 	"github.com/franciscovmn/middlewarePubSub/internal/pb"
 	"github.com/franciscovmn/middlewarePubSub/internal/protoconv"
+	"github.com/franciscovmn/middlewarePubSub/peer"
 	"github.com/franciscovmn/middlewarePubSub/topic"
 )
 
@@ -20,13 +20,18 @@ func (c *clientConn) dispatch(req *pb.Envelope) bool {
 		return false
 	}
 	var reply *pb.Envelope
+	var after func()
 	if c.b.cfg.Limiter.AllowCommand(c.session.Identity) {
-		reply = c.execute(req)
+		reply, after = c.execute(req)
 	} else {
 		reply = failure(req, pb.Status_STATUS_LIMIT_EXCEEDED, "cota de comandos excedida")
 	}
 	reply.RequestId = req.RequestId
-	return c.wc.Send(reply) == nil
+	err := c.wc.Send(reply)
+	if after != nil {
+		after()
+	}
+	return err == nil
 }
 
 func isCommand(req *pb.Envelope) bool {
@@ -38,20 +43,22 @@ func isCommand(req *pb.Envelope) bool {
 	return false
 }
 
-func (c *clientConn) execute(req *pb.Envelope) *pb.Envelope {
+// execute devolve a resposta e, opcionalmente, uma função a chamar depois
+// que ela for escrita.
+func (c *clientConn) execute(req *pb.Envelope) (*pb.Envelope, func()) {
 	switch body := req.Body.(type) {
 	case *pb.Envelope_CreateTopic:
-		return c.createTopic(req, body.CreateTopic)
+		return c.createTopic(req, body.CreateTopic), nil
 	case *pb.Envelope_DeleteTopic:
-		return c.deleteTopic(req, body.DeleteTopic)
+		return c.deleteTopic(req, body.DeleteTopic), nil
 	case *pb.Envelope_LookupTopic:
-		return c.lookupTopic(req, body.LookupTopic)
+		return c.lookupTopic(req, body.LookupTopic), nil
 	case *pb.Envelope_Subscribe:
 		return c.subscribe(req, body.Subscribe)
 	case *pb.Envelope_Unsubscribe:
-		return c.unsubscribe(req, body.Unsubscribe)
+		return c.unsubscribe(req, body.Unsubscribe), nil
 	case *pb.Envelope_GetStats:
-		return c.getStats(req)
+		return c.getStats(req), nil
 	}
 	panic("broker: comando sem tratamento")
 }
@@ -60,14 +67,16 @@ func (c *clientConn) createTopic(req *pb.Envelope, m *pb.CreateTopic) *pb.Envelo
 	if c.b.cfg.RestrictTopicAdmin && !c.session.Admin {
 		return failure(req, pb.Status_STATUS_FORBIDDEN, "criação restrita a administradores")
 	}
-	c.b.topicMu.Lock()
-	info, err := c.b.catalog.Create(protoconv.SpecFromProto(m))
-	c.b.topicMu.Unlock()
-	if err != nil {
-		return failure(req, topicErrorStatus(err), err.Error())
+	spec := protoconv.SpecFromProto(m)
+	if err := spec.Validate(); err != nil {
+		return failure(req, pb.Status_STATUS_INVALID_ARGUMENT, err.Error())
+	}
+	res := c.b.changeTopic(peer.Request{OperationID: peer.NewOperationID(), Kind: peer.OpCreate, Spec: spec})
+	if res.Status != pb.Status_STATUS_OK {
+		return failure(req, res.Status, res.Detail)
 	}
 	return &pb.Envelope{Body: &pb.Envelope_CreateTopicReply{CreateTopicReply: &pb.CreateTopicReply{
-		Status: pb.Status_STATUS_OK, Topic: protoconv.TopicInfoToProto(info),
+		Status: pb.Status_STATUS_OK, Topic: protoconv.TopicInfoToProto(res.Topic),
 	}}}
 }
 
@@ -75,36 +84,13 @@ func (c *clientConn) deleteTopic(req *pb.Envelope, m *pb.DeleteTopic) *pb.Envelo
 	if c.b.cfg.RestrictTopicAdmin && !c.session.Admin {
 		return failure(req, pb.Status_STATUS_FORBIDDEN, "exclusão restrita a administradores")
 	}
-	info, err := c.b.deleteTopic(m.GetName())
-	if err != nil {
-		return failure(req, topicErrorStatus(err), err.Error())
+	res := c.b.changeTopic(peer.Request{OperationID: peer.NewOperationID(), Kind: peer.OpDelete, Name: m.GetName()})
+	if res.Status != pb.Status_STATUS_OK {
+		return failure(req, res.Status, res.Detail)
 	}
 	return &pb.Envelope{Body: &pb.Envelope_DeleteTopicReply{DeleteTopicReply: &pb.DeleteTopicReply{
-		Status: pb.Status_STATUS_OK, Topic: protoconv.TopicInfoToProto(info),
+		Status: pb.Status_STATUS_OK, Topic: protoconv.TopicInfoToProto(res.Topic),
 	}}}
-}
-
-// deleteTopic apaga o tópico, remove as inscrições locais de todas as
-// gerações e avisa as sessões inscritas.
-func (b *Broker) deleteTopic(name string) (topic.Info, error) {
-	b.topicMu.Lock()
-	info, err := b.catalog.Delete(name)
-	var removed []contract.Subscription
-	if err == nil {
-		removed = b.subs.RemoveTopic(info.ID)
-	}
-	b.topicMu.Unlock()
-	if err != nil {
-		return topic.Info{}, err
-	}
-
-	for _, sub := range removed {
-		b.push(sub.Session, &pb.Envelope{Body: &pb.Envelope_SubscriptionEnded{SubscriptionEnded: &pb.SubscriptionEnded{
-			Topic:  protoconv.TopicInfoToProto(sub.Topic),
-			Reason: pb.Status_STATUS_TOPIC_NOT_FOUND,
-		}}})
-	}
-	return info, nil
 }
 
 func (c *clientConn) lookupTopic(req *pb.Envelope, m *pb.LookupTopic) *pb.Envelope {
@@ -117,23 +103,59 @@ func (c *clientConn) lookupTopic(req *pb.Envelope, m *pb.LookupTopic) *pb.Envelo
 	}}}
 }
 
-func (c *clientConn) subscribe(req *pb.Envelope, m *pb.Subscribe) *pb.Envelope {
-	c.b.topicMu.RLock()
-	defer c.b.topicMu.RUnlock()
-
-	info, ok := c.b.catalog.Lookup(m.GetName())
-	if !ok || (m.GetGeneration() != 0 && topic.Generation(m.GetGeneration()) != info.Generation) {
-		return failure(req, pb.Status_STATUS_TOPIC_NOT_FOUND, "tópico inexistente ou geração antiga")
+// subscribe registra a inscrição e, com par configurado, anuncia o
+// interesse quando o tópico passa a ter assinantes locais, confirmando ao
+// cliente só depois do ACK. A resposta é escrita com a leitura do catálogo
+// ainda travada, para que um aviso de exclusão do mesmo tópico não chegue
+// ao cliente antes da confirmação.
+func (c *clientConn) subscribe(req *pb.Envelope, m *pb.Subscribe) (*pb.Envelope, func()) {
+	b := c.b
+	if b.link != nil {
+		b.interestMu.Lock()
+		defer b.interestMu.Unlock()
+		if !b.link.Link().Alive {
+			return failure(req, pb.Status_STATUS_UNAVAILABLE, "enlace com o par indisponível"), nil
+		}
 	}
-	c.b.subs.Add(c.session, info)
-	return &pb.Envelope{Body: &pb.Envelope_SubscribeReply{SubscribeReply: &pb.SubscribeReply{
+
+	b.topicMu.RLock()
+	info, ok := b.catalog.Lookup(m.GetName())
+	if !ok || (m.GetGeneration() != 0 && topic.Generation(m.GetGeneration()) != info.Generation) {
+		b.topicMu.RUnlock()
+		return failure(req, pb.Status_STATUS_TOPIC_NOT_FOUND, "tópico inexistente ou geração antiga"), nil
+	}
+	had := b.subs.HasLocal(info.Ref)
+	b.subs.Add(c.session, info)
+	reply := &pb.Envelope{Body: &pb.Envelope_SubscribeReply{SubscribeReply: &pb.SubscribeReply{
 		Status: pb.Status_STATUS_OK, Topic: protoconv.TopicInfoToProto(info),
 	}}}
+	if b.link == nil || had {
+		return reply, b.topicMu.RUnlock
+	}
+	b.topicMu.RUnlock()
+
+	if err := b.link.Announce(info.Ref, true); err != nil {
+		b.subs.Remove(c.session.ID, info.Ref)
+		return failure(req, pb.Status_STATUS_UNAVAILABLE, "par não confirmou a inscrição"), nil
+	}
+	b.topicMu.RLock()
+	if _, ok := b.catalog.Resolve(info.Ref); !ok {
+		b.topicMu.RUnlock()
+		return failure(req, pb.Status_STATUS_TOPIC_NOT_FOUND, "tópico apagado durante a inscrição"), nil
+	}
+	return reply, b.topicMu.RUnlock
 }
 
 // unsubscribe é idempotente: remover uma inscrição inexistente responde OK.
+// A inscrição sai da tabela local mesmo se o par não confirmar a retirada
+// do interesse; nesse caso o enlace cai e o par descarta a visão.
 func (c *clientConn) unsubscribe(req *pb.Envelope, m *pb.Unsubscribe) *pb.Envelope {
-	info, ok := c.b.catalog.Lookup(m.GetName())
+	b := c.b
+	if b.link != nil {
+		b.interestMu.Lock()
+		defer b.interestMu.Unlock()
+	}
+	info, ok := b.catalog.Lookup(m.GetName())
 	if !ok {
 		return failure(req, pb.Status_STATUS_TOPIC_NOT_FOUND, "tópico não encontrado")
 	}
@@ -141,7 +163,9 @@ func (c *clientConn) unsubscribe(req *pb.Envelope, m *pb.Unsubscribe) *pb.Envelo
 	if m.GetGeneration() != 0 {
 		ref.Generation = topic.Generation(m.GetGeneration())
 	}
-	c.b.subs.Remove(c.session.ID, ref)
+	if _, removed := b.subs.Remove(c.session.ID, ref); removed && b.link != nil && !b.subs.HasLocal(ref) {
+		b.link.Announce(ref, false)
+	}
 	return &pb.Envelope{Body: &pb.Envelope_UnsubscribeReply{UnsubscribeReply: &pb.UnsubscribeReply{
 		Status: pb.Status_STATUS_OK,
 	}}}
@@ -169,6 +193,8 @@ func topicErrorStatus(err error) pb.Status {
 		return pb.Status_STATUS_TOPIC_NOT_FOUND
 	case errors.Is(err, topic.ErrInvalidName), errors.Is(err, topic.ErrInvalidKind), errors.Is(err, topic.ErrInvalidTTL):
 		return pb.Status_STATUS_INVALID_ARGUMENT
+	case errors.Is(err, peer.ErrUnavailable):
+		return pb.Status_STATUS_UNAVAILABLE
 	}
 	return pb.Status_STATUS_INTERNAL
 }

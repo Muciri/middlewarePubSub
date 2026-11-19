@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/franciscovmn/middlewarePubSub/internal/contract"
+	"github.com/franciscovmn/middlewarePubSub/peer"
 )
 
 const (
@@ -48,6 +49,10 @@ type Config struct {
 
 	Stats   contract.StatsSource
 	Limiter contract.CommandLimiter
+
+	// Peer configura o canal com o outro broker; nil opera sem par. O
+	// identificador local é ID.
+	Peer *peer.Config
 }
 
 var ErrInvalidConfig = errors.New("broker: configuração inválida")

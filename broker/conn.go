@@ -11,6 +11,7 @@ import (
 	"github.com/franciscovmn/middlewarePubSub/internal/contract"
 	"github.com/franciscovmn/middlewarePubSub/internal/pb"
 	"github.com/franciscovmn/middlewarePubSub/internal/wire"
+	"github.com/franciscovmn/middlewarePubSub/topic"
 )
 
 type clientConn struct {
@@ -216,7 +217,18 @@ func (c *clientConn) cleanup() {
 		delete(b.conns, c.session.ID)
 	}
 	b.mu.Unlock()
-	b.subs.RemoveSession(c.session.ID)
+	removed := b.subs.RemoveSession(c.session.ID)
 	c.release()
+	if b.link != nil && len(removed) > 0 {
+		refs := make([]topic.Ref, len(removed))
+		for i, sub := range removed {
+			refs[i] = sub.Topic.Ref
+		}
+		b.wg.Add(1)
+		go func() {
+			defer b.wg.Done()
+			b.withdrawInterest(refs)
+		}()
+	}
 	close(c.done)
 }

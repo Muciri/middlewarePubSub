@@ -8,6 +8,7 @@ import (
 
 	"github.com/franciscovmn/middlewarePubSub/internal/contract"
 	"github.com/franciscovmn/middlewarePubSub/internal/pb"
+	"github.com/franciscovmn/middlewarePubSub/peer"
 	"github.com/franciscovmn/middlewarePubSub/topic"
 )
 
@@ -28,11 +29,18 @@ type Broker struct {
 	sessions *contract.SessionTable
 	subs     *contract.SubscriptionTable
 	interest contract.InterestView
-	link     contract.LinkState
+	linkView contract.LinkState
+	// link é nil sem par configurado.
+	link *peer.Link
 
 	// topicMu impede que uma inscrição seja registrada numa versão de
 	// tópico que está sendo apagada.
 	topicMu sync.RWMutex
+	// adminMu serializa as alterações do catálogo no broker administrativo.
+	adminMu sync.Mutex
+	// interestMu serializa as mudanças de interesse local e seus anúncios
+	// ao par. Ordem de aquisição: interestMu antes de topicMu.
+	interestMu sync.Mutex
 
 	// helloMu serializa a admissão de sessões.
 	helloMu sync.Mutex
@@ -49,23 +57,57 @@ var _ contract.ResultSink = (*Broker)(nil)
 
 var ErrClosed = errors.New("broker: encerrado")
 
+// New cria o broker. Com par configurado como administrativo, a discagem
+// ao par começa aqui; o outro broker passa a aceitar o par em ServePeer.
 func New(cfg Config) (*Broker, error) {
 	cfg, err := cfg.withDefaults()
 	if err != nil {
 		return nil, err
 	}
-	return &Broker{
+	b := &Broker{
 		cfg:       cfg,
 		started:   time.Now(),
 		catalog:   topic.NewCatalog(),
 		sessions:  contract.NewSessionTable(),
 		subs:      contract.NewSubscriptionTable(),
 		interest:  standaloneInterest{},
-		link:      &contract.MemoryLink{},
+		linkView:  &contract.MemoryLink{},
 		listeners: make(map[net.Listener]struct{}),
 		raw:       make(map[net.Conn]struct{}),
 		conns:     make(map[contract.SessionID]*clientConn),
-	}, nil
+	}
+	if cfg.Peer != nil {
+		pc := *cfg.Peer
+		pc.LocalID = cfg.ID
+		link, err := peer.New(pc, peerStore{b})
+		if err != nil {
+			return nil, err
+		}
+		b.link = link
+		b.interest = link.Interest()
+		b.linkView = link
+		link.Start()
+	}
+	return b, nil
+}
+
+var ErrNoPeer = errors.New("broker: sem par configurado")
+
+// ServePeer aceita a conexão do broker administrativo até Close.
+func (b *Broker) ServePeer(ln net.Listener) error {
+	if b.link == nil {
+		ln.Close()
+		return ErrNoPeer
+	}
+	return b.link.Serve(ln)
+}
+
+func (b *Broker) ListenAndServePeer(addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return b.ServePeer(ln)
 }
 
 func (b *Broker) Contracts() Contracts {
@@ -74,7 +116,7 @@ func (b *Broker) Contracts() Contracts {
 		Topics:        b.catalog,
 		Subscriptions: b.subs,
 		Interest:      b.interest,
-		Link:          b.link,
+		Link:          b.linkView,
 		Results:       b,
 	}
 }
@@ -151,6 +193,9 @@ func (b *Broker) Close() error {
 		nc.Close()
 	}
 	b.mu.Unlock()
+	if b.link != nil {
+		b.link.Close()
+	}
 	b.wg.Wait()
 	return nil
 }
