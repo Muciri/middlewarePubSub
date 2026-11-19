@@ -125,3 +125,46 @@ func TestForTopicReturnsCopy(t *testing.T) {
 		t.Fatal("ForTopic expôs o estado interno")
 	}
 }
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+func TestDoneClosedOnEveryRemovalPath(t *testing.T) {
+	st := NewSubscriptionTable()
+	byRemove, _ := st.Add(Session{ID: 1}, info(1, 1))
+	bySession, _ := st.Add(Session{ID: 2}, info(1, 1))
+	byTopic, _ := st.Add(Session{ID: 3}, info(2, 1))
+	kept, _ := st.Add(Session{ID: 4}, info(3, 1))
+
+	if isClosed(byRemove.Done()) {
+		t.Fatal("Done fechado antes da remoção")
+	}
+	st.Remove(1, info(1, 1).Ref)
+	st.RemoveSession(2)
+	st.RemoveTopic(2)
+
+	for name, sub := range map[string]Subscription{"Remove": byRemove, "RemoveSession": bySession, "RemoveTopic": byTopic} {
+		if !isClosed(sub.Done()) {
+			t.Errorf("%s não fechou Done", name)
+		}
+	}
+	if isClosed(kept.Done()) {
+		t.Fatal("inscrição não removida teve Done fechado")
+	}
+}
+
+func TestDoneSharedByRepeatedAdd(t *testing.T) {
+	st := NewSubscriptionTable()
+	first, _ := st.Add(Session{ID: 1}, info(1, 1))
+	again, _ := st.Add(Session{ID: 1}, info(1, 1))
+	st.Remove(1, info(1, 1).Ref)
+	if !isClosed(first.Done()) || !isClosed(again.Done()) {
+		t.Fatal("as duas cópias deveriam observar o fechamento")
+	}
+}

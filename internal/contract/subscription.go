@@ -18,7 +18,14 @@ type Subscription struct {
 	Identity string
 	UDPAddr  netip.AddrPort
 	Topic    topic.Info
+
+	done chan struct{}
 }
+
+// Done é fechado quando a inscrição deixa de existir: Unsubscribe, queda da
+// conexão, encerramento por consumidor lento ou exclusão do tópico. A fila
+// associada à inscrição pode ser liberada nesse momento.
+func (s Subscription) Done() <-chan struct{} { return s.done }
 
 // Subscriptions responde quais sessões locais recebem eventos de uma versão
 // de tópico. Os resultados são cópias e não mudam após o retorno.
@@ -54,7 +61,7 @@ func (t *SubscriptionTable) Add(s Session, info topic.Info) (sub Subscription, c
 		return cur, false
 	}
 	t.nextID++
-	sub = Subscription{ID: t.nextID, Session: s.ID, Identity: s.Identity, UDPAddr: s.UDPAddr, Topic: info}
+	sub = Subscription{ID: t.nextID, Session: s.ID, Identity: s.Identity, UDPAddr: s.UDPAddr, Topic: info, done: make(chan struct{})}
 	subs[s.ID] = sub
 	return sub, true
 }
@@ -72,6 +79,7 @@ func (t *SubscriptionTable) Remove(session SessionID, ref topic.Ref) (Subscripti
 	if len(subs) == 0 {
 		delete(t.byTopic, ref)
 	}
+	close(sub.done)
 	return sub, true
 }
 
@@ -83,6 +91,7 @@ func (t *SubscriptionTable) RemoveSession(session SessionID) []Subscription {
 	var removed []Subscription
 	for ref, subs := range t.byTopic {
 		if sub, ok := subs[session]; ok {
+			close(sub.done)
 			removed = append(removed, sub)
 			delete(subs, session)
 			if len(subs) == 0 {
@@ -105,6 +114,7 @@ func (t *SubscriptionTable) RemoveTopic(id topic.ID) []Subscription {
 			continue
 		}
 		for _, sub := range subs {
+			close(sub.done)
 			removed = append(removed, sub)
 		}
 		delete(t.byTopic, ref)

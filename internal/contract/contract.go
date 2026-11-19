@@ -7,7 +7,11 @@
 //	Interesse do par       InterestView    MemoryInterest
 //	Enlace entre brokers   LinkState       MemoryLink
 //	Resultado de admissão  ResultSink      MemoryResultSink
+//	Diagnóstico            StatsSource     EmptyStats
+//	Cota de comandos       CommandLimiter  AllowAllCommands
 //
-// As interfaces expõem só leitura ao plano de dados; as operações de escrita
-// ficam nos tipos concretos, usados pelo plano de controle.
+// Nas cinco primeiras, o plano de dados só lê; as operações de escrita ficam
+// nos tipos concretos, usados pelo plano de controle. ResultSink é chamado
+// pelo plano de dados e implementado pelo broker. As duas últimas são
+// implementadas pelo plano de dados e consultadas pelo broker.
 package contract
