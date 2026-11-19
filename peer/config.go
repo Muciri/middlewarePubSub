@@ -6,6 +6,7 @@ package peer
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"time"
 
@@ -44,6 +45,9 @@ type Config struct {
 	AckTimeout time.Duration
 	BackoffMin time.Duration
 	BackoffMax time.Duration
+
+	// Logger recebe os registros do enlace. Nil usa slog.Default().
+	Logger *slog.Logger
 }
 
 var ErrInvalidConfig = errors.New("peer: configuração inválida")
@@ -71,6 +75,9 @@ func (c Config) withDefaults() (Config, error) {
 	set(&c.BackoffMax, DefaultBackoffMax)
 	if c.HeartbeatInterval >= c.DeadAfter {
 		return c, fmt.Errorf("%w: heartbeat deve ser menor que o limite de silêncio", ErrInvalidConfig)
+	}
+	if c.Logger == nil {
+		c.Logger = slog.Default()
 	}
 	if c.BackoffMin > c.BackoffMax {
 		return c, fmt.Errorf("%w: recuo mínimo maior que o máximo", ErrInvalidConfig)

@@ -42,7 +42,8 @@ func (b *Broker) applyLocally(req peer.Request) peer.Result {
 	}
 	b.topicMu.Unlock()
 
-	b.notifyEnded(removed)
+	b.logChange(req.Kind, info, err, "local")
+	b.notifyEnded(removed, "exclusão")
 	return result(info, err)
 }
 
@@ -68,7 +69,9 @@ func (b *Broker) replicateAndApply(req peer.Request) peer.Result {
 
 	u := peer.Update{OperationID: req.OperationID, Version: b.catalog.Version() + 1, Kind: req.Kind, Topic: info}
 	if err := b.link.Replicate(u); err != nil {
-		return peer.Result{Status: pb.Status_STATUS_UNAVAILABLE, Detail: "par não confirmou a alteração"}
+		b.log.Warn("alteração do catálogo não aplicada: par indisponível ou sem confirmação", "operacao", opName(req.Kind),
+			"topico", info.Name, "erro", err)
+		return peer.Result{Status: pb.Status_STATUS_UNAVAILABLE, Detail: "par indisponível ou sem confirmação"}
 	}
 
 	var removed []contract.Subscription
@@ -82,8 +85,29 @@ func (b *Broker) replicateAndApply(req peer.Request) peer.Result {
 	}
 	b.topicMu.Unlock()
 
-	b.notifyEnded(removed)
+	b.logChange(req.Kind, info, err, "replicada ao par")
+	b.notifyEnded(removed, "exclusão")
 	return result(info, err)
+}
+
+func opName(k peer.OpKind) string {
+	if k == peer.OpCreate {
+		return "criação"
+	}
+	return "exclusão"
+}
+
+// logChange registra uma alteração do catálogo aplicada localmente.
+func (b *Broker) logChange(k peer.OpKind, info topic.Info, err error, origin string) {
+	if err != nil {
+		return
+	}
+	msg := "tópico criado"
+	if k == peer.OpDelete {
+		msg = "tópico apagado"
+	}
+	b.log.Info(msg, "topico", info.Name, "id", uint32(info.ID), "geracao", uint32(info.Generation),
+		"versao", b.catalog.Version(), "origem", origin)
 }
 
 func result(info topic.Info, err error) peer.Result {
@@ -95,7 +119,10 @@ func result(info topic.Info, err error) peer.Result {
 
 // notifyEnded avisa as sessões cujas inscrições foram encerradas pela
 // exclusão do tópico.
-func (b *Broker) notifyEnded(removed []contract.Subscription) {
+func (b *Broker) notifyEnded(removed []contract.Subscription, why string) {
+	if len(removed) > 0 {
+		b.log.Info("inscrições encerradas", "motivo", why, "quantidade", len(removed))
+	}
 	for _, sub := range removed {
 		b.push(sub.Session, &pb.Envelope{Body: &pb.Envelope_SubscriptionEnded{SubscriptionEnded: &pb.SubscriptionEnded{
 			Topic:  protoconv.TopicInfoToProto(sub.Topic),
@@ -143,7 +170,8 @@ func (s peerStore) ApplyUpdate(u peer.Update) error {
 		}
 	}
 	b.topicMu.Unlock()
-	b.notifyEnded(removed)
+	b.logChange(u.Kind, u.Topic, err, "recebida do par")
+	b.notifyEnded(removed, "exclusão")
 	return err
 }
 
@@ -158,7 +186,10 @@ func (s peerStore) ApplySnapshot(snap topic.Snapshot) error {
 		removed = append(removed, b.subs.RemoveRef(info.Ref)...)
 	}
 	b.topicMu.Unlock()
-	b.notifyEnded(removed)
+	if len(superseded) > 0 {
+		b.log.Info("tópicos removidos pelo snapshot do par", "quantidade", len(superseded))
+	}
+	b.notifyEnded(removed, "snapshot do par")
 	return err
 }
 

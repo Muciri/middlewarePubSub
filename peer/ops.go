@@ -35,8 +35,7 @@ func (l *Link) Replicate(u Update) error {
 	}()
 
 	if err := s.send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_CatalogUpdate{CatalogUpdate: updateToProto(u)}}); err != nil {
-		s.close()
-		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return s.fail(fmt.Errorf("%w: %w", ErrUnavailable, err))
 	}
 	timer := time.NewTimer(l.cfg.AckTimeout)
 	defer timer.Stop()
@@ -45,11 +44,9 @@ func (l *Link) Replicate(u Update) error {
 		if ack.GetStatus() == pb.Status_STATUS_OK && ack.GetVersion() == u.Version {
 			return nil
 		}
-		s.close()
-		return fmt.Errorf("%w: par recusou a versão %d: %s", ErrUnavailable, u.Version, ack.GetDetail())
+		return s.fail(fmt.Errorf("%w: par recusou a versão %d: %s", ErrUnavailable, u.Version, ack.GetDetail()))
 	case <-timer.C:
-		s.close()
-		return fmt.Errorf("%w: sem ACK em %v", ErrUnavailable, l.cfg.AckTimeout)
+		return s.fail(fmt.Errorf("%w: sem ACK em %v", ErrUnavailable, l.cfg.AckTimeout))
 	case <-s.done:
 		return ErrUnavailable
 	}
@@ -77,8 +74,7 @@ func (l *Link) Forward(req Request) (Result, error) {
 	}()
 
 	if err := s.send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_ForwardCatalog{ForwardCatalog: requestToProto(req)}}); err != nil {
-		s.close()
-		return Result{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return Result{}, s.fail(fmt.Errorf("%w: %w", ErrUnavailable, err))
 	}
 	timer := time.NewTimer(2 * l.cfg.AckTimeout)
 	defer timer.Stop()
@@ -125,8 +121,7 @@ func (l *Link) Announce(ref topic.Ref, has bool) error {
 		s.mu.Unlock()
 	}()
 	if err != nil {
-		s.close()
-		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return s.fail(fmt.Errorf("%w: %w", ErrUnavailable, err))
 	}
 
 	timer := time.NewTimer(l.cfg.AckTimeout)
@@ -135,8 +130,7 @@ func (l *Link) Announce(ref topic.Ref, has bool) error {
 	case <-ch:
 		return nil
 	case <-timer.C:
-		s.close()
-		return fmt.Errorf("%w: sem ACK de interesse em %v", ErrUnavailable, l.cfg.AckTimeout)
+		return s.fail(fmt.Errorf("%w: sem ACK de interesse em %v", ErrUnavailable, l.cfg.AckTimeout))
 	case <-s.done:
 		return ErrUnavailable
 	}

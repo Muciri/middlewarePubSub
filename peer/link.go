@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"sync"
@@ -27,6 +28,7 @@ var (
 // segunda conexão enquanto a primeira estiver ativa.
 type Link struct {
 	cfg      Config
+	log      *slog.Logger
 	store    Store
 	interest *contract.MemoryInterest
 	applied  *opSet
@@ -53,6 +55,7 @@ func New(cfg Config, store Store) (*Link, error) {
 	}
 	return &Link{
 		cfg:       cfg,
+		log:       cfg.Logger,
 		store:     store,
 		interest:  contract.NewMemoryInterest(),
 		applied:   newOpSet(1024),
@@ -101,7 +104,7 @@ func (l *Link) Close() {
 	s := l.sess
 	l.mu.Unlock()
 	if s != nil {
-		s.close()
+		s.fail(ErrClosed)
 	}
 	l.wg.Wait()
 }
@@ -109,15 +112,22 @@ func (l *Link) Close() {
 func (l *Link) dialLoop() {
 	defer l.wg.Done()
 	backoff := l.cfg.BackoffMin
-	for {
+	for attempt := 1; ; attempt++ {
 		s, err := l.dial()
 		if err == nil {
 			backoff = l.cfg.BackoffMin
+			attempt = 0
 			s.run()
 			continue
 		}
 		if errors.Is(err, ErrClosed) {
 			return
+		}
+		if errors.Is(err, ErrRejected) {
+			l.log.Warn("enlace: par recusou a conexão", "par", l.cfg.PeerID, "addr", l.cfg.DialAddr, "erro", err)
+		} else {
+			l.log.Debug("enlace: tentativa de conexão falhou", "par", l.cfg.PeerID, "addr", l.cfg.DialAddr,
+				"tentativa", attempt, "proxima_em", backoff, "erro", err)
 		}
 		select {
 		case <-l.stop:
@@ -181,6 +191,8 @@ func (l *Link) dial() (*session, error) {
 		return nil, s.abort(fmt.Errorf("%w: snapshot não confirmado", ErrRejected))
 	}
 	l.setSynced()
+	l.log.Info("enlace: snapshot do catálogo enviado e confirmado", "par", l.cfg.PeerID,
+		"versao", snap.Version, "ativos", len(snap.Live), "apagados", len(snap.Deleted))
 	return s, nil
 }
 
@@ -223,6 +235,10 @@ func (l *Link) adoptIfNeeded(s *session) error {
 	snap, err := snapshotFromProto(m)
 	if err == nil {
 		err = l.store.ApplySnapshot(snap)
+	}
+	if err == nil {
+		l.log.Info("enlace: catálogo adotado do par", "par", l.cfg.PeerID,
+			"versao", snap.Version, "ativos", len(snap.Live), "apagados", len(snap.Deleted))
 	}
 	return err
 }
@@ -296,11 +312,13 @@ func (l *Link) accept(nc net.Conn) {
 	}
 	if l.cfg.Admin || hello.GetBrokerId() != l.cfg.PeerID ||
 		subtle.ConstantTimeCompare([]byte(hello.GetToken()), []byte(l.cfg.Token)) != 1 {
+		l.log.Warn("enlace: conexão recusada, par não reconhecido", "remoto", nc.RemoteAddr().String(), "broker_id", hello.GetBrokerId())
 		reject(pb.Status_STATUS_UNAUTHENTICATED, "par não reconhecido")
 		return
 	}
 	s := newSession(l, wc)
 	if err := l.attach(s, l.peerUDP(nc.RemoteAddr(), hello.GetUdpPort())); err != nil {
+		l.log.Warn("enlace: conexão duplicada recusada", "remoto", nc.RemoteAddr().String())
 		reject(pb.Status_STATUS_SESSION_CONFLICT, "já existe conexão com o par")
 		return
 	}
@@ -342,6 +360,8 @@ func (l *Link) accept(nc net.Conn) {
 	}
 	l.applied.reset()
 	l.setSynced()
+	l.log.Info("enlace: snapshot do catálogo aplicado", "par", l.cfg.PeerID,
+		"versao", snap.Version, "ativos", len(snap.Live), "apagados", len(snap.Deleted))
 	if err := wc.Send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_CatalogSnapshotAck{CatalogSnapshotAck: &pb.CatalogSnapshotAck{
 		Version: snap.Version,
 	}}}); err != nil {
@@ -375,11 +395,17 @@ func (l *Link) detach(s *session) {
 		l.mu.Unlock()
 		return
 	}
+	wasAlive, since := l.status.Alive, l.status.Since
 	l.sess = nil
 	l.status.Alive = false
 	l.status.Since = time.Now()
 	l.mu.Unlock()
 	l.interest.Invalidate()
+	if wasAlive {
+		l.log.Warn("enlace: perdido", "par", l.cfg.PeerID, "causa", s.failure(), "ativo_por", time.Since(since))
+	} else {
+		l.log.Warn("enlace: conexão encerrada antes de ficar ativa", "par", l.cfg.PeerID, "causa", s.failure())
+	}
 }
 
 func (l *Link) markAlive(s *session) {
@@ -388,6 +414,8 @@ func (l *Link) markAlive(s *session) {
 	if l.sess == s {
 		l.status.Alive = true
 		l.status.Since = time.Now()
+		l.log.Info("enlace: ativo", "par", l.cfg.PeerID, "administrativo", l.cfg.Admin,
+			"udp_par", l.status.PeerUDP.String())
 	}
 }
 

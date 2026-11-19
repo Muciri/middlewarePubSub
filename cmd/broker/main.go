@@ -13,13 +13,13 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/franciscovmn/middlewarePubSub/broker"
+	"github.com/franciscovmn/middlewarePubSub/internal/logging"
 	"github.com/franciscovmn/middlewarePubSub/peer"
 )
 
@@ -37,55 +37,71 @@ func main() {
 		peerListen = flag.String("peer-listen", fmt.Sprintf(":%d", peer.DefaultPort), "endereço do canal entre brokers (outro broker)")
 		peerToken  = flag.String("peer-token", "", "segredo compartilhado entre os brokers")
 		peerUDP    = flag.String("peer-udp-addr", "", "sobrescreve o endereço UDP de eventos do par, informado por ele no handshake")
+
+		logFormat = flag.String("log-format", "text", "formato do log: text ou json")
+		logLevel  = flag.String("log-level", "info", "nível do log: debug, info, warn ou error")
 	)
 	flag.Parse()
 
+	log, err := logging.New(os.Stderr, *logFormat, *logLevel)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	fatal := func(msg string, args ...any) {
+		log.Error(msg, args...)
+		os.Exit(1)
+	}
 	if *eventPort == 0 || *eventPort > 65535 {
-		log.Fatalf("porta UDP inválida: %d", *eventPort)
+		fatal("porta UDP inválida", "porta", *eventPort)
 	}
 	creds, err := broker.LoadCredentials(*credsPath)
 	if err != nil {
-		log.Fatal(err)
+		fatal("credenciais", "erro", err)
 	}
 	cfg := broker.Config{
 		ID:                 *id,
 		EventPort:          uint16(*eventPort),
 		Credentials:        creds,
 		RestrictTopicAdmin: *restricted,
+		Logger:             log,
 	}
 	if *peerID != "" {
 		cfg.Peer = &peer.Config{PeerID: *peerID, Admin: *peerAdmin, DialAddr: *peerAddr, Token: *peerToken}
 		if *peerUDP != "" {
 			ap, err := netip.ParseAddrPort(*peerUDP)
 			if err != nil {
-				log.Fatalf("endereço UDP do par inválido: %v", err)
+				fatal("endereço UDP do par inválido", "erro", err)
 			}
 			cfg.Peer.PeerUDPOverride = ap
 		}
 	}
 	b, err := broker.New(cfg)
 	if err != nil {
-		log.Fatal(err)
+		fatal("configuração", "erro", err)
 	}
+	log = log.With("broker", *id)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-sig
+		s := <-sig
+		log.Info("sinal recebido, encerrando", "sinal", s.String())
 		b.Close()
 	}()
 
 	if cfg.Peer != nil && !cfg.Peer.Admin {
 		go func() {
-			log.Printf("broker %s aguardando o par em %s", *id, *peerListen)
+			log.Info("aguardando o par", "addr", *peerListen, "par", *peerID)
 			if err := b.ListenAndServePeer(*peerListen); err != nil {
-				log.Fatal(err)
+				fatal("canal entre brokers", "erro", err)
 			}
 		}()
 	}
-	log.Printf("broker %s ouvindo comandos em %s", *id, *listen)
+	log.Info("broker iniciado", "comandos", *listen, "udp", *eventPort, "par", *peerID,
+		"administrativo", cfg.Peer != nil && cfg.Peer.Admin)
 	if err := b.ListenAndServe(*listen); err != nil {
-		log.Fatal(err)
+		fatal("canal de comandos", "erro", err)
 	}
-	log.Printf("broker %s encerrado", *id)
+	log.Info("broker encerrado")
 }

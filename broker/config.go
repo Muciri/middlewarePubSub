@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -53,6 +54,10 @@ type Config struct {
 	// Peer configura o canal com o outro broker; nil opera sem par. O
 	// identificador local é ID.
 	Peer *peer.Config
+
+	// Logger recebe os registros do broker e, se Peer.Logger for nil, do
+	// enlace. Nil usa slog.Default().
+	Logger *slog.Logger
 }
 
 var ErrInvalidConfig = errors.New("broker: configuração inválida")
@@ -91,6 +96,10 @@ func (c Config) withDefaults() (Config, error) {
 	if c.Limiter == nil {
 		c.Limiter = contract.AllowAllCommands{}
 	}
+	if c.Logger == nil {
+		c.Logger = slog.Default()
+	}
+	c.Logger = c.Logger.With("broker", c.ID)
 	return c, nil
 }
 

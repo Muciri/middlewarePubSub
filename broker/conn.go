@@ -2,6 +2,8 @@ package broker
 
 import (
 	"crypto/subtle"
+	"errors"
+	"fmt"
 	"math"
 	"net"
 	"net/netip"
@@ -26,6 +28,11 @@ type clientConn struct {
 	closeOnce sync.Once
 	closing   chan struct{}
 	done      chan struct{}
+	// cause é o motivo do encerramento visto pela leitura; reason, o
+	// motivo dado por quem encerrou a conexão, que tem precedência.
+	cause    error
+	reasonMu sync.Mutex
+	reason   error
 }
 
 func (b *Broker) handle(nc net.Conn) {
@@ -63,6 +70,7 @@ func (b *Broker) admit(wc *wire.Conn, remote net.Addr) *clientConn {
 
 	cred, known := b.cfg.Credentials[hello.Identity]
 	if !known || subtle.ConstantTimeCompare([]byte(cred.Token), []byte(hello.Token)) != 1 {
+		b.log.Warn("Hello recusado: credencial inválida", "identidade", hello.Identity, "remoto", remote.String())
 		return reject(pb.Status_STATUS_UNAUTHENTICATED, "identidade ou token inválido")
 	}
 	if hello.SessionId == 0 || hello.UdpPort > math.MaxUint16 {
@@ -77,6 +85,8 @@ func (b *Broker) admit(wc *wire.Conn, remote net.Addr) *clientConn {
 	}
 	c, err := b.register(wc, s)
 	if err != nil {
+		b.log.Warn("Hello recusado: sessão ligada a outra identidade", "identidade", hello.Identity,
+			"sessao", hello.SessionId, "remoto", remote.String())
 		return reject(pb.Status_STATUS_SESSION_CONFLICT, "sessão ligada a outra identidade")
 	}
 	if c == nil {
@@ -90,10 +100,13 @@ func (b *Broker) admit(wc *wire.Conn, remote net.Addr) *clientConn {
 		UdpPort:             uint32(b.cfg.EventPort),
 	}}})
 	if err != nil {
+		c.cause = err
 		c.close()
 		c.cleanup()
 		return nil
 	}
+	b.log.Info("sessão admitida", "identidade", s.Identity, "sessao", uint64(s.ID),
+		"remoto", remote.String(), "udp", s.UDPAddr.String())
 	return c
 }
 
@@ -111,7 +124,7 @@ func (b *Broker) register(wc *wire.Conn, s contract.Session) (*clientConn, error
 	old := b.conns[s.ID]
 	b.mu.Unlock()
 	if old != nil {
-		old.close()
+		old.closeWith(errors.New("substituída por nova conexão da mesma sessão"))
 		<-old.done
 	}
 
@@ -155,9 +168,11 @@ func (c *clientConn) serve() {
 	for {
 		req := &pb.Envelope{}
 		if err := c.wc.Receive(req); err != nil {
+			c.cause = readFailure(err, c.b.cfg.HeartbeatTimeout)
 			break
 		}
-		if !c.dispatch(req) {
+		if err := c.dispatch(req); err != nil {
+			c.cause = err
 			break
 		}
 	}
@@ -180,7 +195,7 @@ func (c *clientConn) writeLoop() {
 			env = &pb.Envelope{Body: &pb.Envelope_Heartbeat{Heartbeat: &pb.Heartbeat{Nonce: nonce}}}
 		}
 		if err := c.wc.Send(env); err != nil {
-			c.close()
+			c.closeWith(fmt.Errorf("escrita: %w", err))
 			return
 		}
 	}
@@ -199,6 +214,15 @@ func (c *clientConn) push(env *pb.Envelope) bool {
 	default:
 		return false
 	}
+}
+
+func (c *clientConn) closeWith(reason error) {
+	c.reasonMu.Lock()
+	if c.reason == nil {
+		c.reason = reason
+	}
+	c.reasonMu.Unlock()
+	c.close()
 }
 
 func (c *clientConn) close() {
@@ -230,5 +254,22 @@ func (c *clientConn) cleanup() {
 			b.withdrawInterest(refs)
 		}()
 	}
+	c.reasonMu.Lock()
+	cause := c.reason
+	c.reasonMu.Unlock()
+	if cause == nil {
+		cause = c.cause
+	}
+	b.log.Info("sessão encerrada", "identidade", c.session.Identity, "sessao", uint64(c.session.ID),
+		"causa", cause, "inscricoes", len(removed))
 	close(c.done)
+}
+
+// readFailure distingue o silêncio do cliente do encerramento da conexão.
+func readFailure(err error, silence time.Duration) error {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("cliente em silêncio por %v", silence)
+	}
+	return fmt.Errorf("conexão encerrada: %w", err)
 }

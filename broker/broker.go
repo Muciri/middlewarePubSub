@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ type Contracts struct {
 
 type Broker struct {
 	cfg      Config
+	log      *slog.Logger
 	started  time.Time
 	catalog  *topic.Catalog
 	sessions *contract.SessionTable
@@ -66,6 +68,7 @@ func New(cfg Config) (*Broker, error) {
 	}
 	b := &Broker{
 		cfg:       cfg,
+		log:       cfg.Logger,
 		started:   time.Now(),
 		catalog:   topic.NewCatalog(),
 		sessions:  contract.NewSessionTable(),
@@ -80,6 +83,9 @@ func New(cfg Config) (*Broker, error) {
 		pc := *cfg.Peer
 		pc.LocalID = cfg.ID
 		pc.EventPort = cfg.EventPort
+		if pc.Logger == nil {
+			pc.Logger = cfg.Logger
+		}
 		link, err := peer.New(pc, peerStore{b})
 		if err != nil {
 			return nil, err

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/franciscovmn/middlewarePubSub/internal/pb"
@@ -10,14 +11,16 @@ import (
 	"github.com/franciscovmn/middlewarePubSub/topic"
 )
 
-// dispatch trata uma mensagem após o Hello. Devolve falso para encerrar a
-// conexão: violação de protocolo ou falha ao responder.
-func (c *clientConn) dispatch(req *pb.Envelope) bool {
+var errProtocol = errors.New("mensagem fora do protocolo")
+
+// dispatch trata uma mensagem após o Hello. Um erro encerra a conexão:
+// violação de protocolo ou falha ao responder.
+func (c *clientConn) dispatch(req *pb.Envelope) error {
 	if req.GetHeartbeat() != nil {
-		return true
+		return nil
 	}
 	if !isCommand(req) {
-		return false
+		return errProtocol
 	}
 	var reply *pb.Envelope
 	var after func()
@@ -31,7 +34,10 @@ func (c *clientConn) dispatch(req *pb.Envelope) bool {
 	if after != nil {
 		after()
 	}
-	return err == nil
+	if err != nil {
+		return fmt.Errorf("resposta: %w", err)
+	}
+	return nil
 }
 
 func isCommand(req *pb.Envelope) bool {
@@ -137,6 +143,10 @@ func (c *clientConn) subscribe(req *pb.Envelope, m *pb.Subscribe) (*pb.Envelope,
 	}
 	had := b.subs.HasLocal(info.Ref)
 	b.subs.Add(c.session, info)
+	if m.GetRestore() {
+		b.log.Info("inscrição restaurada", "identidade", c.session.Identity, "sessao", uint64(c.session.ID),
+			"topico", info.Name, "geracao", uint32(info.Generation), "enlace_ativo", alive || b.link == nil)
+	}
 	reply := &pb.Envelope{Body: &pb.Envelope_SubscribeReply{SubscribeReply: &pb.SubscribeReply{
 		Status: pb.Status_STATUS_OK, Topic: protoconv.TopicInfoToProto(info),
 	}}}

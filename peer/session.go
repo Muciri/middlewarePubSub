@@ -1,7 +1,9 @@
 package peer
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -31,6 +33,8 @@ type session struct {
 	forwards     map[string]chan *pb.ForwardCatalogReply
 	interestAcks map[uint64]chan struct{}
 	pings        map[uint64]time.Time
+	// cause é o motivo do encerramento, registrado na queda do enlace.
+	cause error
 }
 
 func newSession(l *Link, wc *wire.Conn) *session {
@@ -52,9 +56,26 @@ func (s *session) close() {
 	})
 }
 
+// fail encerra a sessão guardando o primeiro motivo, e devolve err.
+func (s *session) fail(err error) error {
+	s.mu.Lock()
+	if s.cause == nil {
+		s.cause = err
+	}
+	s.mu.Unlock()
+	s.close()
+	return err
+}
+
+func (s *session) failure() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cause
+}
+
 // abort encerra uma sessão que não chegou a funcionar.
 func (s *session) abort(err error) error {
-	s.close()
+	s.fail(err)
 	s.l.detach(s)
 	return err
 }
@@ -76,7 +97,9 @@ func (s *session) run() {
 	defer s.close()
 
 	var err error
+	var sent int
 	s.l.store.WithLocalInterest(func(refs []topic.Ref) {
+		sent = len(refs)
 		m := &pb.InterestSnapshot{}
 		for _, r := range refs {
 			m.Topics = append(m.Topics, refToProto(r))
@@ -92,16 +115,20 @@ func (s *session) run() {
 		s.l.markAlive(s)
 	})
 	if err != nil {
+		s.fail(fmt.Errorf("envio do snapshot de interesse: %w", err))
 		return
 	}
+	s.l.log.Info("enlace: interesse local enviado ao par", "par", s.l.cfg.PeerID, "topicos", sent)
 
 	go s.heartbeat()
 	for {
 		env := &pb.PeerEnvelope{}
 		if err := s.wc.Receive(env); err != nil {
+			s.fail(readFailure(err, s.l.cfg.DeadAfter))
 			return
 		}
 		if !s.handle(env) {
+			s.fail(errors.New("mensagem fora do protocolo"))
 			return
 		}
 		s.mu.Lock()
@@ -132,7 +159,7 @@ func (s *session) heartbeat() {
 			}
 			s.mu.Unlock()
 			if err := s.send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_Ping{Ping: &pb.Ping{Nonce: nonce}}}); err != nil {
-				s.close()
+				s.fail(fmt.Errorf("envio de heartbeat: %w", err))
 				return
 			}
 		}
@@ -190,6 +217,7 @@ func (s *session) handle(env *pb.PeerEnvelope) bool {
 		s.inSeq = body.InterestSnapshot.GetSeq()
 		s.viewKnown = true
 		s.mu.Unlock()
+		s.l.log.Info("enlace: interesse do par recebido", "par", s.l.cfg.PeerID, "topicos", len(refs))
 		return true
 	case *pb.PeerEnvelope_InterestUpdate:
 		return s.handleInterestUpdate(body.InterestUpdate)
@@ -248,7 +276,7 @@ func (s *session) handleForward(m *pb.ForwardCatalog) {
 		}
 	}
 	if err := s.send(&pb.PeerEnvelope{Body: &pb.PeerEnvelope_ForwardCatalogReply{ForwardCatalogReply: reply}}); err != nil {
-		s.close()
+		s.fail(fmt.Errorf("resposta ao repasse: %w", err))
 	}
 }
 
@@ -305,4 +333,14 @@ func (o *opSet) reset() {
 		o.ring[i] = ""
 	}
 	o.next = 0
+}
+
+// readFailure descreve a falha de leitura, distinguindo o silêncio do par
+// do encerramento explícito da conexão.
+func readFailure(err error, silence time.Duration) error {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Errorf("par em silêncio por %v", silence)
+	}
+	return fmt.Errorf("conexão encerrada: %w", err)
 }
