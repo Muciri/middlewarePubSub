@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -105,13 +106,14 @@ func recvClosed(t *testing.T, s *Subscription) {
 }
 
 func TestDialAnnouncesUDPAndLearnsBrokerAddress(t *testing.T) {
-	b, addr := startBroker(t, broker.Config{ID: "B", EventPort: 7101})
+	port := clientUDPPort(t)
+	b, addr := startBroker(t, broker.Config{ID: "B", EventPort: port})
 	c, dp := dial(t, addr, "ana", nil)
 
 	if c.BrokerID() != "B" {
 		t.Fatalf("BrokerID = %q", c.BrokerID())
 	}
-	if dp.Broker() != netip.MustParseAddrPort("127.0.0.1:7101") {
+	if dp.Broker() != netip.MustParseAddrPort(net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))) {
 		t.Fatalf("destino UDP = %v", dp.Broker())
 	}
 	s, ok := b.Contracts().Sessions.Get(contract.SessionID(c.session))

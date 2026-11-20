@@ -74,6 +74,27 @@ func (b *Broker) dispatchUDP(conn *net.UDPConn) {
 					b.count("delivery_error")
 				}
 			}
+			if e.Header.Flags&eventwire.FlagPeerForwarded == 0 {
+				link := b.Contracts().Link.Link()
+				interest := b.Contracts().Interest.RemoteInterest(ref)
+				if link.Alive && link.PeerUDP.IsValid() && interest.HasSubscribers && interest.Fresh(time.Now(), contract.InterestMaxAge) {
+					left -= link.RTT / 2
+					if left <= 0 {
+						b.count("expired_forward")
+						continue
+					}
+					e.Header.Flags |= eventwire.FlagPeerForwarded
+					e.Header.TTL = left
+					forward, err := eventwire.Encode(e.Header, e.Payload)
+					if err == nil {
+						if _, err = conn.WriteToUDPAddrPort(forward, link.PeerUDP); err != nil {
+							b.count("peer_forward_error")
+						} else {
+							b.count("peer_forwarded")
+						}
+					}
+				}
+			}
 			b.count("dispatched")
 			b.gauge("queue_global", int64(b.scheduler.Len()))
 			b.gauge("queue_bytes", int64(b.scheduler.Bytes()))
@@ -100,6 +121,37 @@ func (b *Broker) handleDatagram(conn *net.UDPConn, from netip.AddrPort, packet [
 		return
 	}
 	ref := topic.Ref{ID: h.Topic, Generation: h.Generation}
+	if h.Flags&eventwire.FlagPeerForwarded != 0 {
+		link := b.Contracts().Link.Link()
+		if !link.Alive || !link.PeerUDP.IsValid() || netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) != link.PeerUDP {
+			b.count("invalid_peer_datagram")
+			return
+		}
+		info, ok := b.Contracts().Topics.Resolve(ref)
+		if !ok {
+			b.count("topic_not_found")
+			return
+		}
+		if !info.AcceptsTTL(h.TTL) {
+			b.count("invalid_ttl")
+			return
+		}
+		if !b.Contracts().Subscriptions.HasLocal(ref) {
+			b.count("peer_without_local_interest")
+			return
+		}
+		e := eventwire.QueuedEvent{Header: h, Payload: append([]byte(nil), payload...), Deadline: time.Now().Add(h.TTL)}
+		if !b.scheduler.Enqueue("peer:"+link.PeerUDP.String(), e) {
+			b.count("overloaded")
+			return
+		}
+		b.count("peer_received")
+		select {
+		case b.dispatch <- struct{}{}:
+		default:
+		}
+		return
+	}
 	sessionID := contract.SessionID(h.Session)
 	sess, ok := b.Contracts().Sessions.Get(sessionID)
 	if !ok || sess.UDPAddr != netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) {
@@ -123,9 +175,14 @@ func (b *Broker) handleDatagram(conn *net.UDPConn, from netip.AddrPort, packet [
 	default:
 		subs := b.Contracts().Subscriptions.ForTopic(ref)
 		remote := b.Contracts().Interest.RemoteInterest(ref)
-		if len(subs) == 0 && !remote.HasSubscribers {
+		fresh := remote.Fresh(time.Now(), contract.InterestMaxAge)
+		link := b.Contracts().Link.Link()
+		if len(subs) == 0 && fresh && !remote.HasSubscribers {
 			result.Status = contract.AdmissionNoSubscribers
 			b.count("no_subscribers")
+		} else if len(subs) == 0 && (!fresh || !remote.HasSubscribers || !link.Alive || !link.PeerUDP.IsValid()) {
+			result.Status = contract.AdmissionUnavailable
+			b.count("interest_unavailable")
 		} else {
 			e := eventwire.QueuedEvent{Header: h, Payload: append([]byte(nil), payload...), Deadline: time.Now().Add(h.TTL)}
 			if !b.scheduler.Enqueue(sess.Identity, e) {

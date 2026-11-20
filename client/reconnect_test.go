@@ -1,9 +1,11 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,6 +34,7 @@ func fastPeer(peerID string, admin bool, dial string) *peer.Config {
 type cluster struct {
 	a, b         *broker.Broker
 	addrA, addrB string
+	portA, portB uint16
 	toA, toB     *testproxy.Proxy
 }
 
@@ -52,15 +55,28 @@ func startCluster(t *testing.T) *cluster {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k.b, k.addrB = startBroker(t, broker.Config{ID: "B", EventPort: 7102, HeartbeatInterval: 50 * time.Millisecond, Peer: fastPeer("A", false, "")})
+	k.portA = clientUDPPort(t)
+	k.portB = clientUDPPort(t)
+	k.b, k.addrB = startBroker(t, broker.Config{ID: "B", EventPort: k.portB, HeartbeatInterval: 50 * time.Millisecond, Peer: fastPeer("A", false, "")})
 	go k.b.ServePeer(ln)
-	k.a, k.addrA = startBroker(t, broker.Config{ID: "A", EventPort: 7101, HeartbeatInterval: 50 * time.Millisecond, Peer: fastPeer("B", true, ln.Addr().String())})
+	k.a, k.addrA = startBroker(t, broker.Config{ID: "A", EventPort: k.portA, HeartbeatInterval: 50 * time.Millisecond, Peer: fastPeer("B", true, ln.Addr().String())})
 	eventually(t, func() bool {
 		return k.a.Contracts().Link.Link().Alive && k.b.Contracts().Link.Link().Alive
 	}, "enlace entre brokers")
 	k.toA = newProxy(t, k.addrA)
 	k.toB = newProxy(t, k.addrB)
 	return k
+}
+
+func clientUDPPort(t *testing.T) uint16 {
+	t.Helper()
+	c, e := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero})
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := uint16(c.LocalAddr().(*net.UDPAddr).Port)
+	c.Close()
+	return p
 }
 
 type reconnectingClient struct {
@@ -86,6 +102,54 @@ func (k *cluster) dial(t *testing.T, mutate func(*Config)) *reconnectingClient {
 	})
 	rc.dp = dp
 	return rc
+}
+
+func TestUDPEventForwardsOnceToPeerSubscriber(t *testing.T) {
+	k := startCluster(t)
+	newReal := func(addr string, identity string) *Client {
+		dp, err := ListenUDPDataPlane("127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := Dial(context.Background(), Config{Brokers: []string{addr}, Identity: identity, Token: creds[identity].Token, DataPlane: dp})
+		if err != nil {
+			dp.Close()
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	admin := newReal(k.addrA, "admin")
+	publisher := newReal(k.addrA, "ana")
+	consumer := newReal(k.addrB, "ana")
+	info, err := admin.CreateTopic(context.Background(), topic.Spec{Name: "peer/udp", Kind: topic.KindEphemeral})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := consumer.Subscribe(context.Background(), info.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := publisher.Publish(info.Name, []byte("um salto"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := pending.Wait(context.Background()); err != nil || st != StatusAccepted {
+		t.Fatalf("admissão=%v, %v", st, err)
+	}
+	select {
+	case e := <-sub.Events():
+		if string(e.Payload) != "um salto" {
+			t.Fatalf("evento=%+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("evento não chegou ao assinante remoto")
+	}
+	select {
+	case e := <-sub.Events():
+		t.Fatalf("evento foi reencaminhado/duplicado: %+v", e)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func (rc *reconnectingClient) waitReconnect(t *testing.T) Reconnect {
@@ -166,7 +230,7 @@ func TestFailoverRestoresSubscriptionsAndKeepsSequence(t *testing.T) {
 	if last := sent[len(sent)-1]; last.Sequence != 3 || last.Session != c.session {
 		t.Fatalf("última publicação = %+v", last)
 	}
-	if c.dp.Broker() != netip.MustParseAddrPort("127.0.0.1:7102") {
+	if c.dp.Broker() != netip.MustParseAddrPort(net.JoinHostPort("127.0.0.1", strconv.Itoa(int(k.portB)))) {
 		t.Fatalf("destino UDP = %v", c.dp.Broker())
 	}
 
