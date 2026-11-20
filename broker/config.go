@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/franciscovmn/middlewarePubSub/diagnostics"
 	"github.com/franciscovmn/middlewarePubSub/internal/contract"
 	"github.com/franciscovmn/middlewarePubSub/peer"
 )
@@ -48,8 +49,11 @@ type Config struct {
 	// aguardando escrita em cada conexão.
 	ResultQueue int
 
-	Stats   contract.StatsSource
-	Limiter contract.CommandLimiter
+	Stats        contract.StatsSource
+	Limiter      contract.CommandLimiter
+	EventLimiter interface {
+		AllowEvents(identity string, bytes int) bool
+	}
 
 	// Peer configura o canal com o outro broker; nil opera sem par. O
 	// identificador local é ID.
@@ -91,10 +95,13 @@ func (c Config) withDefaults() (Config, error) {
 		c.ResultQueue = DefaultResultQueue
 	}
 	if c.Stats == nil {
-		c.Stats = contract.EmptyStats{}
+		c.Stats = diagnostics.New()
 	}
 	if c.Limiter == nil {
-		c.Limiter = contract.AllowAllCommands{}
+		c.Limiter = diagnostics.NewCommandLimiter(20, 50)
+	}
+	if c.EventLimiter == nil {
+		c.EventLimiter = newEventLimiter(diagnostics.NewTokenLimiter(50, 20), diagnostics.NewTokenLimiter(64*1024, 64*1024))
 	}
 	if c.Logger == nil {
 		c.Logger = slog.Default()

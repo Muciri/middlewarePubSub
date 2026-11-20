@@ -34,7 +34,12 @@ func startBroker(t *testing.T, cfg broker.Config) (*broker.Broker, string) {
 		cfg.Credentials = creds
 	}
 	if cfg.EventPort == 0 {
-		cfg.EventPort = 7101
+		probe, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.EventPort = uint16(probe.LocalAddr().(*net.UDPAddr).Port)
+		probe.Close()
 	}
 	b, err := broker.New(cfg)
 	if err != nil {
@@ -100,7 +105,7 @@ func recvClosed(t *testing.T, s *Subscription) {
 }
 
 func TestDialAnnouncesUDPAndLearnsBrokerAddress(t *testing.T) {
-	b, addr := startBroker(t, broker.Config{ID: "B"})
+	b, addr := startBroker(t, broker.Config{ID: "B", EventPort: 7101})
 	c, dp := dial(t, addr, "ana", nil)
 
 	if c.BrokerID() != "B" {
