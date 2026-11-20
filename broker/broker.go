@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/franciscovmn/middlewarePubSub/internal/contract"
+	"github.com/franciscovmn/middlewarePubSub/internal/eventwire"
 	"github.com/franciscovmn/middlewarePubSub/internal/pb"
 	"github.com/franciscovmn/middlewarePubSub/peer"
 	"github.com/franciscovmn/middlewarePubSub/topic"
@@ -34,8 +35,11 @@ type Broker struct {
 	interest contract.InterestView
 	linkView contract.LinkState
 	// link é nil sem par configurado.
-	link *peer.Link
-	udp  *net.UDPConn
+	link         *peer.Link
+	udp          *net.UDPConn
+	scheduler    *eventwire.FairScheduler
+	dispatch     chan struct{}
+	stopDispatch chan struct{}
 
 	// topicMu impede que uma inscrição seja registrada numa versão de
 	// tópico que está sendo apagada.
@@ -69,17 +73,20 @@ func New(cfg Config) (*Broker, error) {
 		return nil, err
 	}
 	b := &Broker{
-		cfg:       cfg,
-		log:       cfg.Logger,
-		started:   time.Now(),
-		catalog:   topic.NewCatalog(),
-		sessions:  contract.NewSessionTable(),
-		subs:      contract.NewSubscriptionTable(),
-		interest:  standaloneInterest{},
-		linkView:  &contract.MemoryLink{},
-		listeners: make(map[net.Listener]struct{}),
-		raw:       make(map[net.Conn]struct{}),
-		conns:     make(map[contract.SessionID]*clientConn),
+		cfg:          cfg,
+		log:          cfg.Logger,
+		started:      time.Now(),
+		catalog:      topic.NewCatalog(),
+		sessions:     contract.NewSessionTable(),
+		subs:         contract.NewSubscriptionTable(),
+		interest:     standaloneInterest{},
+		linkView:     &contract.MemoryLink{},
+		listeners:    make(map[net.Listener]struct{}),
+		raw:          make(map[net.Conn]struct{}),
+		conns:        make(map[contract.SessionID]*clientConn),
+		scheduler:    eventwire.NewFairScheduler(),
+		dispatch:     make(chan struct{}, 1),
+		stopDispatch: make(chan struct{}),
 	}
 	if cfg.Peer != nil {
 		pc := *cfg.Peer
@@ -154,8 +161,10 @@ func (b *Broker) Serve(ln net.Listener) error {
 	b.udp = udp
 	b.listeners[ln] = struct{}{}
 	b.wg.Add(1)
+	b.wg.Add(1)
 	b.mu.Unlock()
 	go b.serveUDP(udp)
+	go b.dispatchUDP(udp)
 
 	for {
 		nc, err := ln.Accept()
@@ -211,6 +220,7 @@ func (b *Broker) Close() error {
 		return nil
 	}
 	b.closed = true
+	close(b.stopDispatch)
 	for ln := range b.listeners {
 		ln.Close()
 	}

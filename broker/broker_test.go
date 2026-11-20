@@ -29,6 +29,9 @@ func startBroker(t *testing.T, cfg Config) (*Broker, string) {
 	if cfg.Credentials == nil {
 		cfg.Credentials = testCreds
 	}
+	if cfg.EventPort == 0 {
+		cfg.EventPort = freeUDPPort(t)
+	}
 	b, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -40,6 +43,17 @@ func startBroker(t *testing.T, cfg Config) (*Broker, string) {
 	go b.Serve(ln)
 	t.Cleanup(func() { b.Close() })
 	return b, ln.Addr().String()
+}
+
+func freeUDPPort(t *testing.T) uint16 {
+	t.Helper()
+	c, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := uint16(c.LocalAddr().(*net.UDPAddr).Port)
+	c.Close()
+	return p
 }
 
 type rawClient struct {

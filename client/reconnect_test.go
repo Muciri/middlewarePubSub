@@ -1,9 +1,12 @@
 package client
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,7 +35,9 @@ func fastPeer(peerID string, admin bool, dial string) *peer.Config {
 type cluster struct {
 	a, b         *broker.Broker
 	addrA, addrB string
+	portA, portB uint16
 	toA, toB     *testproxy.Proxy
+	peerProxy    *testproxy.Proxy
 }
 
 func newProxy(t *testing.T, target string) *testproxy.Proxy {
@@ -52,15 +57,29 @@ func startCluster(t *testing.T) *cluster {
 	if err != nil {
 		t.Fatal(err)
 	}
-	k.b, k.addrB = startBroker(t, broker.Config{ID: "B", EventPort: 7102, HeartbeatInterval: 50 * time.Millisecond, Peer: fastPeer("A", false, "")})
+	k.portA = clientUDPPort(t)
+	k.portB = clientUDPPort(t)
+	k.b, k.addrB = startBroker(t, broker.Config{ID: "B", EventPort: k.portB, HeartbeatInterval: 50 * time.Millisecond, Peer: fastPeer("A", false, "")})
 	go k.b.ServePeer(ln)
-	k.a, k.addrA = startBroker(t, broker.Config{ID: "A", EventPort: 7101, HeartbeatInterval: 50 * time.Millisecond, Peer: fastPeer("B", true, ln.Addr().String())})
+	k.peerProxy = newProxy(t, ln.Addr().String())
+	k.a, k.addrA = startBroker(t, broker.Config{ID: "A", EventPort: k.portA, HeartbeatInterval: 50 * time.Millisecond, Peer: fastPeer("B", true, k.peerProxy.Addr())})
 	eventually(t, func() bool {
 		return k.a.Contracts().Link.Link().Alive && k.b.Contracts().Link.Link().Alive
 	}, "enlace entre brokers")
 	k.toA = newProxy(t, k.addrA)
 	k.toB = newProxy(t, k.addrB)
 	return k
+}
+
+func clientUDPPort(t *testing.T) uint16 {
+	t.Helper()
+	c, e := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero})
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := uint16(c.LocalAddr().(*net.UDPAddr).Port)
+	c.Close()
+	return p
 }
 
 type reconnectingClient struct {
@@ -86,6 +105,174 @@ func (k *cluster) dial(t *testing.T, mutate func(*Config)) *reconnectingClient {
 	})
 	rc.dp = dp
 	return rc
+}
+
+func TestUDPEventForwardsOnceToPeerSubscriber(t *testing.T) {
+	k := startCluster(t)
+	newReal := func(addr string, identity string) *Client {
+		dp, err := ListenUDPDataPlane("127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := Dial(context.Background(), Config{Brokers: []string{addr}, Identity: identity, Token: creds[identity].Token, DataPlane: dp})
+		if err != nil {
+			dp.Close()
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	admin := newReal(k.addrA, "admin")
+	publisher := newReal(k.addrA, "ana")
+	consumer := newReal(k.addrB, "ana")
+	info, err := admin.CreateTopic(context.Background(), topic.Spec{Name: "peer/udp", Kind: topic.KindEphemeral})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := consumer.Subscribe(context.Background(), info.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := publisher.Publish(info.Name, []byte("um salto"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := pending.Wait(context.Background()); err != nil || st != StatusAccepted {
+		t.Fatalf("admissão=%v, %v", st, err)
+	}
+	select {
+	case e := <-sub.Events():
+		if string(e.Payload) != "um salto" {
+			t.Fatalf("evento=%+v", e)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("evento não chegou ao assinante remoto")
+	}
+	select {
+	case e := <-sub.Events():
+		t.Fatalf("evento foi reencaminhado/duplicado: %+v", e)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestMeasureRTTHalfTTLWithControlledDelay(t *testing.T) {
+	k := startCluster(t)
+	k.peerProxy.SetDelay(30 * time.Millisecond)
+	eventually(t, func() bool { return k.a.Contracts().Link.Link().RTT >= 50*time.Millisecond }, "RTT medido com atraso de 30 ms em cada sentido")
+	dialReal := func(addr, id, token string) *Client {
+		dp, e := ListenUDPDataPlane("127.0.0.1:0")
+		if e != nil {
+			t.Fatal(e)
+		}
+		c, e := Dial(context.Background(), Config{Brokers: []string{addr}, Identity: id, Token: token, DataPlane: dp})
+		if e != nil {
+			dp.Close()
+			t.Fatal(e)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	admin := dialReal(k.addrA, "admin", "ta")
+	pub := dialReal(k.addrA, "ana", "t1")
+	con := dialReal(k.addrB, "ana", "t1")
+	info, e := admin.CreateTopic(context.Background(), topic.Spec{Name: "rtt/half", Kind: topic.KindEphemeral, MaxTTL: 5 * time.Second})
+	if e != nil {
+		t.Fatal(e)
+	}
+	sub, e := con.Subscribe(context.Background(), info.Name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = pub.Publish(info.Name, []byte("rtt"), 5*time.Second)
+	if e != nil {
+		t.Fatal(e)
+	}
+	select {
+	case ev := <-sub.Events():
+		remain := time.Until(ev.Deadline)
+		measured := k.a.Contracts().Link.Link().RTT / 2
+		if remain > 5*time.Second-measured+15*time.Millisecond || remain < 5*time.Second-measured-100*time.Millisecond {
+			t.Fatalf("TTL restante=%v, RTT/2=%v", remain, measured)
+		}
+		fmt.Printf("MEASURE rtt_ms=%.3f ttl_discount_ms=%.3f ttl_remaining_ms=%.3f\n", float64(2*measured.Microseconds())/1000, float64(measured.Microseconds())/1000, float64(remain.Microseconds())/1000)
+	case <-time.After(2 * time.Second):
+		t.Fatal("evento não chegou com atraso controlado")
+	}
+}
+
+func TestMeasureEventGapAcrossBrokerFailover(t *testing.T) {
+	k := startCluster(t)
+	dialUDP := func() *Client {
+		dp, e := ListenUDPDataPlane("127.0.0.1:0")
+		if e != nil {
+			t.Fatal(e)
+		}
+		c, e := Dial(context.Background(), Config{Brokers: []string{k.toA.Addr(), k.toB.Addr()}, Identity: "ana", Token: "t1", DataPlane: dp, HeartbeatTimeout: 300 * time.Millisecond, PublishTimeout: 500 * time.Millisecond, ReconnectBackoffMin: 10 * time.Millisecond, ReconnectBackoffMax: 50 * time.Millisecond})
+		if e != nil {
+			dp.Close()
+			t.Fatal(e)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	adminDP, _ := ListenUDPDataPlane("127.0.0.1:0")
+	admin, e := Dial(context.Background(), Config{Brokers: []string{k.toA.Addr()}, Identity: "admin", Token: "ta", DataPlane: adminDP})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer admin.Close()
+	info, e := admin.CreateTopic(context.Background(), topic.Spec{Name: "failover/events", Kind: topic.KindEphemeral, MaxTTL: 5 * time.Second})
+	if e != nil {
+		t.Fatal(e)
+	}
+	subscriber := dialUDP()
+	publisher := dialUDP()
+	sub, e := subscriber.Subscribe(context.Background(), info.Name)
+	if e != nil {
+		t.Fatal(e)
+	}
+	type stamp struct {
+		seq uint64
+		at  time.Time
+	}
+	events := make(chan stamp, 512)
+	go func() {
+		for ev := range sub.Events() {
+			events <- stamp{ev.Sequence, time.Now()}
+		}
+	}()
+	var lastBefore time.Time
+	var firstAfter time.Time
+	var failedAt = time.Now()
+	finish := time.Now().Add(1800 * time.Millisecond)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	cut := time.After(600 * time.Millisecond)
+	cutDone := false
+	for time.Now().Before(finish) {
+		select {
+		case ev := <-events:
+			if !cutDone {
+				lastBefore = ev.at
+			} else if firstAfter.IsZero() {
+				firstAfter = ev.at
+			}
+		case <-cut:
+			failedAt = time.Now()
+			k.a.Close()
+			cutDone = true
+		case <-ticker.C:
+			_, _ = publisher.Publish(info.Name, []byte("tick"), 0)
+		}
+	}
+	gap := time.Duration(0)
+	if !lastBefore.IsZero() && !firstAfter.IsZero() {
+		gap = firstAfter.Sub(lastBefore)
+	}
+	fmt.Printf("MEASURE failover_event_gap_ms=%.3f last_before_to_failure_ms=%.3f failure_to_first_after_ms=%.3f\n", float64(gap.Microseconds())/1000, float64(failedAt.Sub(lastBefore).Microseconds())/1000, float64(firstAfter.Sub(failedAt).Microseconds())/1000)
+	if lastBefore.IsZero() || firstAfter.IsZero() {
+		t.Fatalf("falha não delimitou evento antes/depois: antes=%v depois=%v", lastBefore, firstAfter)
+	}
 }
 
 func (rc *reconnectingClient) waitReconnect(t *testing.T) Reconnect {
@@ -166,7 +353,7 @@ func TestFailoverRestoresSubscriptionsAndKeepsSequence(t *testing.T) {
 	if last := sent[len(sent)-1]; last.Sequence != 3 || last.Session != c.session {
 		t.Fatalf("última publicação = %+v", last)
 	}
-	if c.dp.Broker() != netip.MustParseAddrPort("127.0.0.1:7102") {
+	if c.dp.Broker() != netip.MustParseAddrPort(net.JoinHostPort("127.0.0.1", strconv.Itoa(int(k.portB)))) {
 		t.Fatalf("destino UDP = %v", c.dp.Broker())
 	}
 

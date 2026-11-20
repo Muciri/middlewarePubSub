@@ -142,7 +142,7 @@ func TestCreateOnPeerIsForwardedToAdmin(t *testing.T) {
 
 func TestRestrictedAdminCheckedBeforeForwarding(t *testing.T) {
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	b, addrB := startBroker(t, Config{ID: "B", RestrictTopicAdmin: true, Peer: fastPeer("A", false, "")})
+	b, addrB := startBroker(t, Config{ID: "B", EventPort: 7102, RestrictTopicAdmin: true, Peer: fastPeer("A", false, "")})
 	go b.ServePeer(ln)
 	a, _ := startBroker(t, Config{ID: "A", Peer: fastPeer("B", true, ln.Addr().String())})
 	waitLinked(t, a, b)

@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	HeaderSize = 34
-	MaxPayload = 1024
-	Version    = 1
+	HeaderSize              = 34
+	MaxPayload              = 1024
+	Version                 = 1
+	FlagPeerForwarded uint8 = 1
 )
 
 var (
