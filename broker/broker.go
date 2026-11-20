@@ -2,6 +2,7 @@ package broker
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"sync"
@@ -34,6 +35,7 @@ type Broker struct {
 	linkView contract.LinkState
 	// link é nil sem par configurado.
 	link *peer.Link
+	udp  *net.UDPConn
 
 	// topicMu impede que uma inscrição seja registrada numa versão de
 	// tópico que está sendo apagada.
@@ -137,14 +139,23 @@ func (b *Broker) Contracts() Contracts {
 
 // Serve aceita conexões até Close.
 func (b *Broker) Serve(ln net.Listener) error {
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: int(b.cfg.EventPort)})
+	if err != nil {
+		ln.Close()
+		return fmt.Errorf("broker: bind UDP %d: %w", b.cfg.EventPort, err)
+	}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
 		ln.Close()
+		udp.Close()
 		return ErrClosed
 	}
+	b.udp = udp
 	b.listeners[ln] = struct{}{}
+	b.wg.Add(1)
 	b.mu.Unlock()
+	go b.serveUDP(udp)
 
 	for {
 		nc, err := ln.Accept()
@@ -205,6 +216,9 @@ func (b *Broker) Close() error {
 	}
 	for nc := range b.raw {
 		nc.Close()
+	}
+	if b.udp != nil {
+		b.udp.Close()
 	}
 	b.mu.Unlock()
 	if b.link != nil {

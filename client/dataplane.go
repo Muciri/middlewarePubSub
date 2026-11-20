@@ -2,10 +2,13 @@ package client
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"net/netip"
 	"sync"
 	"time"
 
+	"github.com/franciscovmn/middlewarePubSub/internal/eventwire"
 	"github.com/franciscovmn/middlewarePubSub/topic"
 )
 
@@ -16,6 +19,89 @@ type Datagram struct {
 	Sequence uint64
 	TTL      time.Duration
 	Payload  []byte
+}
+
+// UDPDataPlane implementa o transporte UDP real do cliente.
+type UDPDataPlane struct {
+	conn    *net.UDPConn
+	mu      sync.Mutex
+	broker  netip.AddrPort
+	deliver func(Event)
+	closed  bool
+	last    map[stream]uint64
+}
+type stream struct {
+	session uint64
+	topic   topic.Ref
+}
+
+func ListenUDPDataPlane(addr string) (*UDPDataPlane, error) {
+	a, e := net.ResolveUDPAddr("udp", addr)
+	if e != nil {
+		return nil, e
+	}
+	c, e := net.ListenUDP("udp", a)
+	if e != nil {
+		return nil, e
+	}
+	d := &UDPDataPlane{conn: c, last: map[stream]uint64{}}
+	go d.readLoop()
+	return d, nil
+}
+func (d *UDPDataPlane) Port() uint16 {
+	if a, ok := d.conn.LocalAddr().(*net.UDPAddr); ok {
+		return uint16(a.Port)
+	}
+	return 0
+}
+func (d *UDPDataPlane) SetBroker(a netip.AddrPort) { d.mu.Lock(); d.broker = a; d.mu.Unlock() }
+func (d *UDPDataPlane) SetDeliver(fn func(Event))  { d.mu.Lock(); d.deliver = fn; d.mu.Unlock() }
+func (d *UDPDataPlane) Send(x Datagram) error {
+	p, e := eventwire.Encode(eventwire.Header{Topic: x.Topic.ID, Generation: x.Topic.Generation, Session: x.Session, Sequence: x.Sequence, TTL: x.TTL}, x.Payload)
+	if e != nil {
+		return e
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return ErrDataPlaneClosed
+	}
+	if !d.broker.IsValid() {
+		return fmt.Errorf("client: destino UDP não definido")
+	}
+	_, e = d.conn.WriteToUDPAddrPort(p, d.broker)
+	return e
+}
+func (d *UDPDataPlane) readLoop() {
+	buf := make([]byte, eventwire.HeaderSize+eventwire.MaxPayload+1)
+	for {
+		n, _, e := d.conn.ReadFromUDP(buf)
+		if e != nil {
+			return
+		}
+		h, p, e := eventwire.Decode(buf[:n])
+		if e != nil {
+			continue
+		}
+		key := stream{h.Session, topic.Ref{ID: h.Topic, Generation: h.Generation}}
+		d.mu.Lock()
+		if h.Sequence <= d.last[key] {
+			d.mu.Unlock()
+			continue
+		}
+		d.last[key] = h.Sequence
+		fn := d.deliver
+		d.mu.Unlock()
+		if fn != nil && h.TTL > 0 {
+			fn(Event{Ref: key.topic, Session: h.Session, Sequence: h.Sequence, Payload: append([]byte(nil), p...), Deadline: time.Now().Add(h.TTL)})
+		}
+	}
+}
+func (d *UDPDataPlane) Close() error {
+	d.mu.Lock()
+	d.closed = true
+	d.mu.Unlock()
+	return d.conn.Close()
 }
 
 // DataPlane é o lado UDP da biblioteca: monta e envia os datagramas e
