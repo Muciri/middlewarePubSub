@@ -53,6 +53,7 @@ func (b *Broker) dispatchUDP(conn *net.UDPConn) {
 				break
 			}
 			left := eventwire.Remaining(e, time.Now())
+			left = left.Truncate(time.Millisecond)
 			if left <= 0 {
 				b.count("expired")
 				continue
@@ -78,7 +79,8 @@ func (b *Broker) dispatchUDP(conn *net.UDPConn) {
 				link := b.Contracts().Link.Link()
 				interest := b.Contracts().Interest.RemoteInterest(ref)
 				if link.Alive && link.PeerUDP.IsValid() && interest.HasSubscribers && interest.Fresh(time.Now(), contract.InterestMaxAge) {
-					left -= link.RTT / 2
+					left = forwardedTTL(left, link.RTT)
+					left = left.Truncate(time.Millisecond)
 					if left <= 0 {
 						b.count("expired_forward")
 						continue
@@ -100,6 +102,14 @@ func (b *Broker) dispatchUDP(conn *net.UDPConn) {
 			b.gauge("queue_bytes", int64(b.scheduler.Bytes()))
 		}
 	}
+}
+
+func forwardedTTL(remaining, rtt time.Duration) time.Duration {
+	d := remaining - rtt/2
+	if d < 0 {
+		return 0
+	}
+	return d
 }
 
 func (b *Broker) count(name string) {

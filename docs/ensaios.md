@@ -428,6 +428,40 @@ virtual separada, com os clientes numa terceira máquina, ou nas duas.
 
 ## 6. Execução de referência
 
+## 7. Carga local, MTU e dados para gráficos
+
+`go run ./cmd/ensaio -eventos 100 -taxa 20 -saida ensaios/resultados/nominal`
+levanta um broker e dois clientes locais usando TCP/UDP reais, cria um
+tópico efêmero, publica na taxa indicada e grava `carga.csv`, `mtu.csv`,
+`resumo.txt`, `mtu-interface.txt` e `metricas.svg`. O CSV inclui latência do
+resultado de admissão, status, memória alocada observada, CPU de usuário e
+descartes da inscrição. `mtu-interface.txt` registra a MTU configurada na
+interface local disponível e o payload IPv4/UDP teórico sem fragmentação
+(MTU menos 28 bytes). `mtu.csv` varre payloads de 0 a 1.024 bytes para medir
+o limite aceito pelo codec UDP do middleware; esse ensaio não envia sondas
+de caminho e não substitui uma medição de MTU entre hosts.
+
+Em Windows, meça a MTU IPv4 do caminho até um destino que responda ICMP com
+`powershell -ExecutionPolicy Bypass -File scripts/medir-mtu.ps1 -Destino <IPv4>`.
+O script usa `ping -f` e busca o maior payload que recebe resposta. Timeout
+ou filtragem ICMP tornam o resultado inconclusivo; o número só vale para o
+caminho até o destino indicado.
+
+Para uma amostra de saturação reproduzível, use
+`go run ./cmd/ensaio -eventos 200 -taxa 200 -saida ensaios/resultados/saturacao`.
+Os resultados de admissão `LIMIT_EXCEEDED` e os contadores `rate_limited`
+mostram o descarte por cota. O resumo inclui média e percentis p50/p95/p99
+da latência de admissão. Para medir RTT/2 e a lacuna de eventos no
+failover sem Docker, execute
+`go test ./client -run 'TestMeasure(EventGapAcrossBrokerFailover|RTTHalfTTLWithControlledDelay)' -count=1 -v`.
+Esses testes sobem dois brokers e clientes UDP reais; um proxy TCP injeta
+atraso bidirecional no enlace de metadados. O ensaio RTT compara o RTT
+observado com o desconto aplicado ao TTL encaminhado. O ensaio de failover
+publica continuamente, encerra o broker ativo e mede o intervalo entre o
+último evento anterior e o primeiro posterior à reconexão. O teste local
+não representa perda de host/rede física nem substitui a execução em
+máquinas separadas descrita acima.
+
 Execução em 19/11/2026, com Docker 29.5.2 no Docker Desktop (Linux arm64,
 máquina virtual sobre macOS) e todos os cenários com as verificações em
 `ok`. Os tempos são do mesmo computador e servem de referência para
