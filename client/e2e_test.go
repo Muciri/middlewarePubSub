@@ -292,6 +292,59 @@ func TestPublishSendsDatagramAndReceivesResult(t *testing.T) {
 	}
 }
 
+func TestUDPTransportPublishesAndDeliversBetweenClients(t *testing.T) {
+	probe, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := uint16(probe.LocalAddr().(*net.UDPAddr).Port)
+	probe.Close()
+	b, addr := startBroker(t, broker.Config{ID: "udp-e2e", EventPort: port})
+	_ = b
+
+	dialReal := func(identity string) *Client {
+		dp, err := ListenUDPDataPlane("127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := Config{Brokers: []string{addr}, Identity: identity, Token: creds[identity].Token, DataPlane: dp, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		c, err := Dial(context.Background(), cfg)
+		if err != nil {
+			dp.Close()
+			t.Fatalf("Dial %s: %v", identity, err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+
+	admin := dialReal("admin")
+	consumer := dialReal("ana")
+	publisher := dialReal("ana")
+	info, err := admin.CreateTopic(ctx(t), topic.Spec{Name: "udp/live", Kind: topic.KindEphemeral})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := consumer.Subscribe(ctx(t), info.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := publisher.Publish(info.Name, []byte("datagrama real"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := pending.Wait(ctx(t)); err != nil || status != StatusAccepted {
+		t.Fatalf("admissão TCP = %v, %v", status, err)
+	}
+	select {
+	case event := <-sub.Events():
+		if event.Ref != info.Ref || event.Session != publisher.session || event.Sequence != 1 || string(event.Payload) != "datagrama real" {
+			t.Fatalf("evento UDP = %+v", event)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("evento não chegou pelo UDP")
+	}
+}
+
 func TestPublishWithoutResultIsUnknown(t *testing.T) {
 	_, addr := startBroker(t, broker.Config{})
 	c, _ := dial(t, addr, "ana", func(cfg *Config) { cfg.PublishTimeout = 50 * time.Millisecond })

@@ -36,7 +36,7 @@ type brokerPair struct {
 // startReplica sobe o broker B com o canal de clientes e o canal do par.
 func startReplica(t *testing.T, peerLn net.Listener) (*Broker, string) {
 	t.Helper()
-	b, addr := startBroker(t, Config{ID: "B", Peer: fastPeer("A", false, "")})
+	b, addr := startBroker(t, Config{ID: "B", EventPort: 7102, Peer: fastPeer("A", false, "")})
 	go b.ServePeer(peerLn)
 	return b, addr
 }
