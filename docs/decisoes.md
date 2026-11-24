@@ -649,3 +649,26 @@ fluxo, e média móvel dos intervalos.
 Justificativa: os cenários 1 a 7 continuam com o mesmo ambiente e
 resultados comparáveis; o cenário 8 e os ensaios de carga sobem o perfil.
 Descartada: subir o leilão em todos os cenários.
+
+## Ajustes da biblioteca cliente
+
+**D82. Conteúdo acima de 1.024 bytes é recusado na biblioteca com
+INVALID_SIZE.**
+`Publish` devolve a publicação já concluída com `StatusInvalidSize` e
+sequência zero, sem enviar o datagrama e sem consumir sequência.
+Justificativa: a seção 5.2 pede a rejeição com INVALID_SIZE, e o broker
+não consegue responder a um datagrama que nem decodifica, o que levaria a
+um UNKNOWN depois de 1 s. Como em D25, a recusa local não cria lacuna de
+sequência para o assinante.
+Descartada: devolver um erro de `Publish`, que não aparece na tabela de
+resultados do documento.
+
+**D83. Sem `DataPlane` configurado, `Dial` abre o UDP numa porta livre.**
+O socket é encerrado com o cliente, ou na hora, se `Dial` falhar.
+`MemoryDataPlane` continua disponível para testes sem rede.
+Justificativa: a biblioteca abre "os canais TCP de controle e UDP de
+eventos" (seção 4.2). Com o plano em memória como padrão, um cliente
+configurado sem `DataPlane` conectava, mas não enviava nem recebia
+eventos, sem nenhum erro.
+Descartada: manter o plano em memória como padrão e exigir que a aplicação
+abra o UDP.

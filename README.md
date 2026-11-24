@@ -84,12 +84,10 @@ taxas e os demais parâmetros.
 ## Biblioteca cliente
 
 ```go
-dp, err := client.ListenUDPDataPlane(":0")
 c, err := client.Dial(ctx, client.Config{
-	Brokers:   []string{"127.0.0.1:7000", "127.0.0.1:7100"},
-	Identity:  "espectador-1",
-	Token:     "...",
-	DataPlane: dp,
+	Brokers:  []string{"127.0.0.1:7000", "127.0.0.1:7100"},
+	Identity: "espectador-1",
+	Token:    "...",
 })
 sub, err := c.Subscribe(ctx, "sala-1/lances")
 for ev := range sub.Events() {
@@ -97,10 +95,11 @@ for ev := range sub.Events() {
 }
 ```
 
-Sem `DataPlane`, a biblioteca usa um plano de dados em memória, que não
-envia nem recebe eventos pela rede. Se o broker cair, a biblioteca passa
-para o próximo da lista, mantém a sessão, troca o destino UDP e restaura as
-inscrições.
+A biblioteca abre o UDP de eventos numa porta livre; para escolher a
+porta, passe `DataPlane: dp` com `dp, _ := client.ListenUDPDataPlane(":7300")`.
+Conteúdo acima de 1.024 bytes não é enviado e volta com INVALID_SIZE. Se o
+broker cair, a biblioteca passa para o próximo da lista, mantém a sessão,
+troca o destino UDP e restaura as inscrições.
 
 ## Ensaios
 
