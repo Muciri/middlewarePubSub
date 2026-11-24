@@ -15,6 +15,7 @@ vet:
 build:
 	go build -o bin/broker ./cmd/broker
 	go build -o bin/sonda ./cmd/sonda
+	go build -o bin/leilao ./cmd/leilao
 
 imagem:
 	scripts/ensaio.sh construir
