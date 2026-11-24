@@ -354,6 +354,12 @@ docker compose exec sonda-a sonda criar -brokers a:7000 -id leiloeiro -token ens
 A "lacuna" que a sonda registra aqui inclui as esperas do roteiro e não
 mede o sistema.
 
+**Desvio do documento (D84):** a tabela da seção 8 diz "serviço
+indisponível até ao menos um broker voltar". Aqui, um broker que volta
+sozinho aceita conexões, mas o catálogo, as inscrições e a criação de
+tópicos só voltam com os dois brokers. O desvio foi mantido de propósito e
+é justificado no relatório.
+
 ### Cenário 6: retorno do broker
 
 **Procedimento:** `scripts/ensaio.sh cenario 6`. Manualmente:

@@ -672,3 +672,25 @@ configurado sem `DataPlane` conectava, mas não enviava nem recebia
 eventos, sem nenhum erro.
 Descartada: manter o plano em memória como padrão e exigir que a aplicação
 abra o UDP.
+
+## Falha dos dois brokers
+
+**D84. Com os dois brokers fora, o serviço só volta quando os dois estão
+de pé.**
+Um broker que volta sozinho aceita o Hello, mas responde UNAVAILABLE a
+LookupTopic, Subscribe e restaurações, porque o catálogo dele está vazio e
+não sincronizado (D57). Também não cria nem apaga tópicos, porque as
+alterações administrativas exigem o ACK do par (D43). Quando o segundo
+volta, o A adota o catálogo do B (D54). Como não há persistência, os
+tópicos precisam ser recriados, e as inscrições antigas terminam com
+`ErrTopicDeleted`.
+Justificativa: a tabela da seção 8 diz "serviço indisponível até ao menos
+um broker voltar". Atender isso ao pé da letra exigiria que um broker
+sozinho aceitasse alterações administrativas sem o par. Isso contraria a
+regra da seção 6.1, de que o A só aplica uma alteração depois do ACK do B.
+Também criaria catálogos divergentes, que o snapshot da reconexão
+resolveria apagando tópicos e encerrando inscrições. O desvio vale só para
+a falha simultânea dos dois brokers; com um deles de pé, a seção 8 é
+seguida como escrita.
+Descartada: permitir que o broker que volta sozinho crie tópicos e
+responda pelo catálogo sem o par.
