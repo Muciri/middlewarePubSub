@@ -8,11 +8,17 @@
 # marcas.log vira [ensaio] e comandos.log vira [comando]. Gera:
 #   linha-do-tempo.log  todas as linhas, ordenadas
 #   resumo.log          só os eventos de falha, enlace e inscrição
-#   medidas.log         por sonda: injeção até detecção, injeção até
-#                       restauração e a lacuna medida pela biblioteca
+#   medidas.log         por cliente: injeção até detecção, injeção até
+#                       restauração e a lacuna medida pela biblioteca; por
+#                       espectador e fluxo do leilão: a lacuna de eventos
 #
-# A primeira marca com texto "injeção:" é o instante zero. Linhas no mesmo
-# milissegundo não têm ordem causal garantida.
+# A primeira marca com texto "injeção:" é o instante zero, e a marca
+# seguinte, "injeção concluída", fecha o intervalo em que a falha ocorreu.
+# A lacuna de eventos de um fluxo é a maior lacuna registrada pelo
+# espectador que cobre esse intervalo: vai do último evento antes da falha
+# ao primeiro depois. Sem lacuna, a interrupção ficou abaixo de 1,5 vez a
+# cadência do fluxo. Linhas no mesmo milissegundo não têm ordem causal
+# garantida.
 set -euo pipefail
 
 DIR=${1:?uso: linha-do-tempo.sh <diretório>}
@@ -34,7 +40,7 @@ etiqueta() {
 	done
 } | LC_ALL=C sort >"$DIR/linha-do-tempo.log"
 
-grep -E 'marca|enlace: (perdido|ativo)|snapshot|adotado|interesse do par|failover|falha no canal|inscrição (encerrada|restaurada)|sessão encerrada|comandos (in)?disponíveis|comando falhou|tópico (criado|apagado)|não aplicada|removidos' \
+grep -E 'marca|msg=inscrito|lacuna de eventos|enlace: (perdido|ativo)|snapshot|adotado|interesse do par|failover|falha no canal|inscrição (encerrada|restaurada)|sessão encerrada|comandos (in)?disponíveis|comando falhou|tópico (criado|apagado)|não aplicada|removidos' \
 	"$DIR/linha-do-tempo.log" >"$DIR/resumo.log" || true
 
 # O horário do dia é usado nos cálculos: o ensaio não pode atravessar a
@@ -44,9 +50,19 @@ function ms(campo,  h) {
 	split(substr(campo, 17, 12), h, ":")
 	return (h[1] * 3600 + h[2] * 60 + h[3]) * 1000
 }
-function sonda() {
-	match($0, /sonda=[^ ]*/)
-	return substr($0, RSTART + 6, RLENGTH - 6)
+function hms(campo,  h) {
+	split(campo, h, ":")
+	return (h[1] * 3600 + h[2] * 60 + h[3]) * 1000
+}
+function valor(chave,  v) {
+	if (!match($0, " " chave "=[^ ]*")) return ""
+	v = substr($0, RSTART + length(chave) + 2, RLENGTH - length(chave) - 2)
+	gsub(/"/, "", v)
+	return v
+}
+function sonda(  q) {
+	q = valor("sonda")
+	return q != "" ? q : valor("cliente")
 }
 /msg=marca/ && /texto="injeção:/ && inj == "" { inj = ms($1) }
 inj != "" && /falha no canal de controle/ { s = sonda(); if (!(s in det)) det[s] = ms($1) - inj }
@@ -58,9 +74,28 @@ inj != "" && /failover concluído/ {
 		match($0, /de=[^ ]* para=[^ ]*/); rota[s] = substr($0, RSTART, RLENGTH)
 	}
 }
+inj != "" && conc == "" && /msg=marca/ && /texto="injeção concluída"/ { conc = ms($1) }
+inj != "" && /msg=fluxo/ { k = sonda() " " valor("fluxo"); visto[k] = 1; cad[k] = valor("cadencia_ms") }
+inj != "" && /msg="lacuna de eventos"/ {
+	de = valor("de"); ate = valor("ate")
+	fim = conc != "" ? conc : inj
+	if (hms(ate) >= inj && hms(de) <= fim) {
+		k = sonda() " " valor("fluxo")
+		g = valor("lacuna_ms") + 0
+		if (!(k in gap) || g > gap[k]) {
+			gap[k] = g; gde[k] = de; gate[k] = ate; gperd[k] = valor("perdidos")
+		}
+	}
+}
 END {
 	for (s in res)
 		printf "%s (%s): detecção %.0f ms após a injeção, restauração %.0f ms após a injeção, lacuna da biblioteca %s ms\n", s, rota[s], det[s], res[s], lac[s]
+	for (k in visto) {
+		if (k in gap)
+			printf "%s: lacuna de eventos %.0f ms, do último evento antes (%s) ao primeiro depois (%s), %s perdidos\n", k, gap[k], gde[k], gate[k], gperd[k]
+		else
+			printf "%s: sem lacuna de eventos acima de 1,5 vez a cadência (%s ms)\n", k, cad[k]
+	}
 }' "$DIR/linha-do-tempo.log" | sort >"$DIR/medidas.log"
 
 echo "ensaio: registros em $DIR" >&2

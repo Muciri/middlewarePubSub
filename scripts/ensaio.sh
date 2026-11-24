@@ -19,6 +19,8 @@
 #   5 a-primeiro|b-primeiro       os dois brokers caem e voltam um de cada vez
 #   6 matar                       retorno do broker B após falha
 #   7 matar                       reinício do broker A com adoção do catálogo
+#   8 matar|parar|travar|isolar   falha do broker A com o leilão em andamento
+#                                 (UDP real); mede a lacuna de eventos
 #
 # Variáveis: ENSAIO_ENV (arquivo de ambiente do compose, padrão
 # scripts/ensaio.env), RESULTADOS (padrão ensaios/resultados) e
@@ -31,11 +33,15 @@ RESULTADOS=${RESULTADOS:-ensaios/resultados}
 ESPERA_MAX=${ESPERA_MAX:-20}
 TOPICOS_INICIAIS="sala-1/lances sala-1/reacoes sala-1/placar=estado"
 
+LEILAO="leiloeiro participante-1 participante-2 espectador-a espectador-b"
+
+# O perfil do leilão fica sempre ativo para que os comandos alcancem esses
+# serviços; preparar sobe só os brokers e as sondas.
 dc() {
 	if [ -f "$ENSAIO_ENV" ]; then
-		docker compose --env-file "$ENSAIO_ENV" "$@"
+		docker compose --env-file "$ENSAIO_ENV" --profile leilao "$@"
 	else
-		docker compose "$@"
+		docker compose --profile leilao "$@"
 	fi
 }
 
@@ -127,7 +133,7 @@ descer() { dc down --remove-orphans --timeout 3 >/dev/null 2>&1 || true; }
 
 preparar() {
 	descer
-	dc up -d >/dev/null
+	dc up -d a b sonda-a sonda-b >/dev/null
 	REDE=$(rede_do_ambiente)
 	local fim=$((SECONDS + ESPERA_MAX))
 	until [ "$(contar a 'enlace: ativo')" -ge 1 ] && [ "$(contar b 'enlace: ativo')" -ge 1 ]; do
@@ -355,11 +361,77 @@ cenario_reinicio_admin() {
 		sonda-a criar -brokers a:7000 $(admin_args) -topico sala-2/lances
 }
 
+# iniciar_leilao sobe a aplicação e espera os eventos circularem pelos dois
+# brokers: cada espectador recebe o participante do próprio broker e, por
+# encaminhamento, o do outro.
+iniciar_leilao() {
+	# shellcheck disable=SC2086
+	dc up -d $LEILAO >/dev/null
+	esperar espectador-a 'msg=inscrito' 3 "espectador-a inscrito nos três tópicos"
+	esperar espectador-b 'msg=inscrito' 3 "espectador-b inscrito nos três tópicos"
+	esperar espectador-a 'fluxo=participante-1/lances recebidos=[1-9]' 1 "espectador-a recebe o participante-1 (local no A)"
+	esperar espectador-a 'fluxo=participante-2/lances recebidos=[1-9]' 1 "espectador-a recebe o participante-2 (encaminhado pelo B)"
+	esperar espectador-b 'fluxo=participante-1/lances recebidos=[1-9]' 1 "espectador-b recebe o participante-1 (encaminhado pelo A)"
+	esperar espectador-b 'fluxo=leiloeiro/placar recebidos=[1-9]' 1 "espectador-b recebe o placar (encaminhado pelo A)"
+	sleep 3
+}
+
+# guardar_antes anota, por espectador e fluxo, quantas janelas de resumo
+# já tiveram eventos; voltou_a_receber compara com essa contagem.
+guardar_antes() {
+	local esp fl
+	: >"$DIR/.antes"
+	for esp in espectador-a espectador-b; do
+		for fl in participante-1/lances participante-2/lances leiloeiro/placar; do
+			printf '%s %s %s\n' "$esp" "$fl" "$(contar "$esp" "fluxo=$fl recebidos=[1-9]")" >>"$DIR/.antes"
+		done
+	done
+}
+
+# voltou_a_receber <espectador> <fluxo> <descrição>: exige duas janelas com
+# eventos depois da injeção. A primeira pode ser a da própria injeção; a
+# segunda só tem eventos se o fluxo voltou.
+voltou_a_receber() {
+	local antes
+	antes=$(awk -v e="$1" -v f="$2" '$1 == e && $2 == f { print $3 }' "$DIR/.antes")
+	esperar "$1" "fluxo=$2 recebidos=[1-9]" $((${antes:-0} + 2)) "$3"
+}
+
+cenario_leilao() {
+	local variante=$1
+	iniciar_leilao
+	guardar_antes
+
+	marcar "injeção: $variante no broker A"
+	falhar_broker a "$variante"
+	marcar "injeção concluída"
+
+	esperar espectador-a 'failover concluído' 1 "espectador-a passou ao B e restaurou as inscrições"
+	esperar participante-1 'failover concluído' 1 "participante-1 passou ao B"
+	esperar leiloeiro 'failover concluído' 1 "leiloeiro passou ao B"
+	voltou_a_receber espectador-a participante-1/lances "espectador-a voltou a receber o participante-1"
+	voltou_a_receber espectador-a participante-2/lances "espectador-a voltou a receber o participante-2"
+	voltou_a_receber espectador-a leiloeiro/placar "espectador-a voltou a receber o placar"
+	voltou_a_receber espectador-b participante-2/lances "espectador-b seguiu recebendo o participante-2"
+	voltou_a_receber espectador-b participante-1/lances "espectador-b voltou a receber o participante-1, agora local no B"
+	voltou_a_receber espectador-b leiloeiro/placar "espectador-b voltou a receber o placar"
+	sem_aumento espectador-b 'failover concluído' 0 "espectador-b seguiu no B"
+	sem_aumento participante-2 'failover concluído' 0 "participante-2 seguiu no B"
+	sem_aumento espectador-a 'inscrição encerrada' 0 "nenhuma inscrição do espectador-a foi encerrada"
+	sem_aumento espectador-b 'inscrição encerrada' 0 "nenhuma inscrição do espectador-b foi encerrada"
+
+	recuperar_broker a "$variante"
+	marcar "broker A recuperado ($variante)"
+	esperar a 'enlace: ativo' 2 "enlace restabelecido após a recuperação"
+	sleep 3
+	sem_aumento espectador-a 'failover concluído' 1 "espectador-a seguiu no B, sem retorno automático"
+}
+
 # coletar guarda os registros de cada serviço e monta a linha do tempo, o
 # resumo e as medidas com scripts/linha-do-tempo.sh.
 coletar() {
 	local svc
-	for svc in a b sonda-a sonda-b; do
+	for svc in $(dc ps -a --services 2>/dev/null); do
 		dc logs --no-color --no-log-prefix "$svc" >"$DIR/$svc.log" 2>/dev/null || true
 	done
 	scripts/linha-do-tempo.sh "$DIR"
@@ -376,7 +448,7 @@ cenario() {
 	1 | 2) variante=${variante:-matar} ;;
 	3 | 4) variante=${variante:-silencioso} ;;
 	5) variante=${variante:-a-primeiro} ;;
-	6 | 7) variante=${variante:-matar} ;;
+	6 | 7 | 8) variante=${variante:-matar} ;;
 	*) info "cenário desconhecido: $n"; exit 2 ;;
 	esac
 	novo_diretorio "cenario$n-$variante"
@@ -391,13 +463,15 @@ cenario() {
 	5) cenario_dois_brokers "$variante" ;;
 	6) cenario_retorno ;;
 	7) cenario_reinicio_admin ;;
+	8) cenario_leilao "$variante" ;;
 	esac
 	marcar "fim do cenário $n ($variante)"
 	sleep 1
 	coletar
+	rm -f "$DIR/.antes"
 }
 
-[ $# -ge 1 ] || { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+[ $# -ge 1 ] || { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 case $1 in
 construir) construir ;;
 preparar) preparar ;;
@@ -405,7 +479,8 @@ cenario) shift; cenario "$@" ;;
 todos)
 	for c in "1 matar" "1 parar" "1 travar" "1 isolar" "2 matar" "2 travar" \
 		"3 silencioso" "3 explicito" "4 silencioso" "4 explicito" \
-		"5 a-primeiro" "5 b-primeiro" "6" "7"; do
+		"5 a-primeiro" "5 b-primeiro" "6" "7" \
+		"8 matar" "8 travar" "8 isolar"; do
 		# shellcheck disable=SC2086
 		cenario $c
 	done
@@ -413,5 +488,5 @@ todos)
 	;;
 coletar) novo_diretorio "${2:-coleta}"; coletar ;;
 descer) descer ;;
-*) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+*) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

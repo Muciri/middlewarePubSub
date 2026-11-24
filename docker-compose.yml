@@ -23,6 +23,16 @@ x-sonda: &sonda
   networks: [pubsub]
   depends_on: [a, b]
 
+# Aplicação do leilão com o plano de dados UDP. Só sobe com o perfil
+# "leilao" (docker compose --profile leilao up).
+x-leilao: &leilao
+  image: ${IMAGEM:-pubsub-middleware:ensaio}
+  cap_add: [NET_ADMIN]
+  restart: "no"
+  networks: [pubsub]
+  depends_on: [a, b]
+  profiles: [leilao]
+
 services:
   a:
     <<: *broker
@@ -97,6 +107,81 @@ services:
       - -silencio=${SILENCIO:-5s}
       - -log-format=${LOG_FORMATO:-text}
       - -log-level=${LOG_NIVEL:-info}
+
+  # Leiloeiro no A: cria a sala, acompanha os lances e publica o placar.
+  leiloeiro:
+    <<: *leilao
+    hostname: leiloeiro
+    environment:
+      LEILAO_BROKERS: a:7000,b:7000
+      LEILAO_ID: leiloeiro
+      LEILAO_TOKEN: ensaio-leiloeiro
+      LEILAO_SALA: ${SALA:-sala-1}
+    command:
+      - leilao
+      - leiloeiro
+      - -criar
+      - -placar=${PLACAR:-100ms}
+      - -resumo=${RESUMO:-2s}
+      - -silencio=${SILENCIO:-5s}
+      - -log-format=${LOG_FORMATO:-text}
+      - -log-level=${LOG_NIVEL:-info}
+
+  participante-1:
+    <<: *leilao
+    hostname: participante-1
+    environment:
+      LEILAO_BROKERS: a:7000,b:7000
+      LEILAO_ID: participante-1
+      LEILAO_TOKEN: ensaio-participante-1
+      LEILAO_SALA: ${SALA:-sala-1}
+    command: &participante
+      - leilao
+      - participante
+      - -lances=${LANCES:-5}
+      - -reacoes=${REACOES:-5}
+      - -rajada=${RAJADA:-10}
+      - -rajada-cada=${RAJADA_CADA:-10s}
+      - -resumo=${RESUMO:-2s}
+      - -silencio=${SILENCIO:-5s}
+      - -log-format=${LOG_FORMATO:-text}
+      - -log-level=${LOG_NIVEL:-info}
+
+  participante-2:
+    <<: *leilao
+    hostname: participante-2
+    environment:
+      LEILAO_BROKERS: b:7000,a:7000
+      LEILAO_ID: participante-2
+      LEILAO_TOKEN: ensaio-participante-2
+      LEILAO_SALA: ${SALA:-sala-1}
+    command: *participante
+
+  espectador-a:
+    <<: *leilao
+    hostname: espectador-a
+    environment:
+      LEILAO_BROKERS: a:7000,b:7000
+      LEILAO_ID: espectador-a
+      LEILAO_TOKEN: ensaio-espectador-a
+      LEILAO_SALA: ${SALA:-sala-1}
+    command: &espectador
+      - leilao
+      - espectador
+      - -resumo=${RESUMO:-2s}
+      - -silencio=${SILENCIO:-5s}
+      - -log-format=${LOG_FORMATO:-text}
+      - -log-level=${LOG_NIVEL:-info}
+
+  espectador-b:
+    <<: *leilao
+    hostname: espectador-b
+    environment:
+      LEILAO_BROKERS: b:7000,a:7000
+      LEILAO_ID: espectador-b
+      LEILAO_TOKEN: ensaio-espectador-b
+      LEILAO_SALA: ${SALA:-sala-1}
+    command: *espectador
 
 networks:
   pubsub:
