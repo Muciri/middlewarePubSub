@@ -10,9 +10,9 @@ Portas de cada broker:
 - 7001/UDP: eventos;
 - 7002/TCP: canal entre os brokers.
 
-O canal de controle e o canal entre brokers estão implementados. O plano de
-dados UDP ainda está em integração; até lá, publicações e entrega de eventos
-dependem das interfaces em `internal/contract` e `client/dataplane.go`.
+Comandos e sincronização entre os brokers usam TCP; os eventos usam UDP,
+com cabeçalho binário fixo de 34 bytes e até 1.024 bytes de conteúdo. Um
+evento só é encaminhado ao outro broker quando ele tem inscritos no tópico.
 
 ## Organização
 
@@ -20,13 +20,17 @@ dependem das interfaces em `internal/contract` e `client/dataplane.go`.
 |---|---|
 | `proto` | mensagens Protobuf (cliente e broker, broker e broker) |
 | `internal/wire` | enquadramento por tamanho das mensagens no TCP |
+| `internal/eventwire` | cabeçalho UDP dos eventos, filas limitadas e rodízio entre publicadores |
 | `topic` | tópicos, gerações e catálogo versionado |
 | `peer` | canal entre brokers: snapshot, replicação e heartbeat |
-| `broker` | servidor do broker |
+| `broker` | servidor do broker: TCP de comandos, UDP de eventos, cotas e encaminhamento ao par |
 | `client` | biblioteca cliente, com troca de broker em caso de falha |
-| `cmd/broker`, `cmd/sonda` | executáveis do broker e da sonda de ensaio |
-| `scripts` | roteiros dos ensaios de falha |
-| `docs` | decisões de implementação e ensaios |
+| `diagnostics` | contadores, cotas por identidade e dados do GetStats |
+| `cmd/broker` | executável do broker |
+| `cmd/sonda` | sonda dos ensaios de falha (canal de controle) |
+| `cmd/ensaio` | ensaio de carga local com TCP e UDP reais |
+| `scripts` | roteiros dos ensaios de falha e medição de MTU |
+| `docs` | decisões de implementação, ensaios e resultados |
 
 ## Compilar e testar
 
@@ -68,20 +72,29 @@ bin/sonda observar -brokers 127.0.0.1:7000,127.0.0.1:7100 -id espectador-1 -toke
 ## Biblioteca cliente
 
 ```go
+dp, err := client.ListenUDPDataPlane(":0")
 c, err := client.Dial(ctx, client.Config{
-	Brokers:  []string{"127.0.0.1:7000", "127.0.0.1:7100"},
-	Identity: "espectador-1",
-	Token:    "...",
+	Brokers:   []string{"127.0.0.1:7000", "127.0.0.1:7100"},
+	Identity:  "espectador-1",
+	Token:     "...",
+	DataPlane: dp,
 })
 sub, err := c.Subscribe(ctx, "sala-1/lances")
+for ev := range sub.Events() {
+	// ev.Payload
+}
 ```
 
-Se o broker cair, a biblioteca passa para o próximo da lista, mantém a
-sessão e restaura as inscrições.
+Sem `DataPlane`, a biblioteca usa um plano de dados em memória, que não
+envia nem recebe eventos pela rede. Se o broker cair, a biblioteca passa
+para o próximo da lista, mantém a sessão, troca o destino UDP e restaura as
+inscrições.
 
 ## Ensaios
 
 Os ensaios de falha rodam em contêineres (`make imagem`, depois
-`scripts/ensaio.sh cenario <n>`). Procedimentos e resultados estão em
-`docs/ensaios.md`. As decisões tomadas durante a implementação estão em
-`docs/decisoes.md`.
+`scripts/ensaio.sh cenario <n>`). O ensaio de carga local roda com
+`go run ./cmd/ensaio`. Procedimentos estão em `docs/ensaios.md` e os
+resultados de carga, MTU, RTT/2 e lacuna de failover em
+`docs/resultados-marco4.md`. As decisões tomadas durante a implementação
+estão em `docs/decisoes.md`.
