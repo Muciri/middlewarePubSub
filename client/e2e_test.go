@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -349,6 +350,97 @@ func TestUDPTransportPublishesAndDeliversBetweenClients(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("evento não chegou pelo UDP")
+	}
+}
+
+func TestPublishOversizedPayloadIsInvalidSize(t *testing.T) {
+	_, addr := startBroker(t, broker.Config{})
+	c, dp := dial(t, addr, "ana", nil)
+	if _, err := c.CreateTopic(ctx(t), topic.Spec{Name: "sala", Kind: topic.KindEphemeral}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := c.Publish("sala", make([]byte, 1025), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := p.Wait(ctx(t)); err != nil || st != StatusInvalidSize || p.Sequence() != 0 {
+		t.Fatalf("conteúdo grande = %v, %v, sequência %d", st, err, p.Sequence())
+	}
+	if n := len(dp.Sent()); n != 0 {
+		t.Fatalf("%d datagramas enviados para conteúdo acima do limite", n)
+	}
+	p, err = c.Publish("sala", make([]byte, 1024), 0)
+	if err != nil || p.Sequence() != 1 {
+		t.Fatalf("conteúdo no limite: %v, sequência %d", err, p.Sequence())
+	}
+	if sent := dp.Sent(); len(sent) != 1 || sent[0].Sequence != 1 {
+		t.Fatalf("datagramas enviados: %+v", sent)
+	}
+}
+
+// TestDialOpensUDPByDefault confere que, sem DataPlane, a biblioteca abre o
+// UDP e entrega eventos pela rede.
+func TestDialOpensUDPByDefault(t *testing.T) {
+	_, addr := startBroker(t, broker.Config{})
+	dialDefault := func(identity string) *Client {
+		c, err := Dial(context.Background(), Config{Brokers: []string{addr}, Identity: identity, Token: creds[identity].Token, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		if err != nil {
+			t.Fatalf("Dial %s: %v", identity, err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	consumer, publisher := dialDefault("admin"), dialDefault("ana")
+	if consumer.dp.Port() == 0 {
+		t.Fatal("plano de dados padrão sem porta UDP")
+	}
+	info, err := consumer.CreateTopic(ctx(t), topic.Spec{Name: "padrao", Kind: topic.KindEphemeral})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := consumer.Subscribe(ctx(t), info.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := publisher.Publish(info.Name, []byte("x"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := p.Wait(ctx(t)); err != nil || st != StatusAccepted {
+		t.Fatalf("admissão = %v, %v", st, err)
+	}
+	select {
+	case ev := <-sub.Events():
+		if string(ev.Payload) != "x" {
+			t.Fatalf("evento %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("evento não chegou pelo UDP padrão")
+	}
+}
+
+func TestDialClosesDefaultUDPOnFailure(t *testing.T) {
+	abertos := func() int {
+		fds, err := os.ReadDir("/dev/fd")
+		if err != nil {
+			t.Skip("sem /dev/fd para contar descritores")
+		}
+		return len(fds)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	antes := abertos()
+	for range 50 {
+		if _, err := Dial(ctx(t), Config{Brokers: []string{addr}, Identity: "ana", Token: "t1"}); err == nil {
+			t.Fatal("Dial sem broker deveria falhar")
+		}
+	}
+	if depois := abertos(); depois-antes > 5 {
+		t.Fatalf("descritores abertos foram de %d para %d após Dial sem broker", antes, depois)
 	}
 }
 

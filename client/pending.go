@@ -38,6 +38,14 @@ func (p *PendingPublish) Wait(ctx context.Context) (Status, error) {
 	}
 }
 
+// resolvedPending devolve uma publicação concluída sem envio, com
+// sequência zero, como a recusada por tamanho.
+func resolvedPending(ref topic.Ref, status Status) *PendingPublish {
+	p := &PendingPublish{key: pendingKey{topic: ref}, done: make(chan struct{}), status: status}
+	close(p.done)
+	return p
+}
+
 type pendingKey struct {
 	topic topic.Ref
 	seq   uint64

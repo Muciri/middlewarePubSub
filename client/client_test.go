@@ -23,7 +23,7 @@ func TestConfigDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.PublishTimeout != time.Second || cfg.HeartbeatTimeout != 5*time.Second ||
-		cfg.MaxPending != 4096 || cfg.DataPlane == nil {
+		cfg.MaxPending != 4096 {
 		t.Fatalf("padrões incorretos: %+v", cfg)
 	}
 }

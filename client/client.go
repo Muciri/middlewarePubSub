@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/franciscovmn/middlewarePubSub/internal/eventwire"
 	"github.com/franciscovmn/middlewarePubSub/internal/pb"
 	"github.com/franciscovmn/middlewarePubSub/internal/protoconv"
 	"github.com/franciscovmn/middlewarePubSub/topic"
@@ -43,8 +44,9 @@ type Config struct {
 	// DefaultMaxPending.
 	MaxPending int
 
-	// DataPlane é o transporte UDP de eventos. Nil usa um MemoryDataPlane
-	// sem porta, que guarda os datagramas sem enviá-los.
+	// DataPlane é o transporte UDP de eventos. Nil faz Dial abrir um
+	// UDPDataPlane numa porta livre, encerrado com o cliente.
+	// MemoryDataPlane serve para testes sem rede.
 	DataPlane DataPlane
 
 	// ReconnectTimeout limita o tempo entre a detecção da falha e a
@@ -88,9 +90,6 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	if c.MaxPending == 0 {
 		c.MaxPending = DefaultMaxPending
-	}
-	if c.DataPlane == nil {
-		c.DataPlane = NewMemoryDataPlane(0)
 	}
 	if c.ReconnectBackoffMin == 0 {
 		c.ReconnectBackoffMin = DefaultReconnectBackoffMin
@@ -187,7 +186,7 @@ type Client struct {
 
 // Dial autentica no primeiro broker disponível da lista. Recusa de
 // credenciais encerra a tentativa sem passar ao próximo broker.
-func Dial(ctx context.Context, cfg Config) (*Client, error) {
+func Dial(ctx context.Context, cfg Config) (_ *Client, retErr error) {
 	cfg, err := cfg.withDefaults()
 	if err != nil {
 		return nil, err
@@ -195,6 +194,18 @@ func Dial(ctx context.Context, cfg Config) (*Client, error) {
 	session, err := newSessionID()
 	if err != nil {
 		return nil, err
+	}
+	if cfg.DataPlane == nil {
+		dp, err := ListenUDPDataPlane(":0")
+		if err != nil {
+			return nil, err
+		}
+		cfg.DataPlane = dp
+		defer func() {
+			if retErr != nil {
+				dp.Close()
+			}
+		}()
 	}
 
 	var conn *controlConn
@@ -461,7 +472,8 @@ func (c *Client) endSubscription(s *Subscription, err error) {
 // falha imediatamente com ErrTooManyPending; durante a reconexão, com
 // ErrReconnecting. Se o tópico não estiver em cache, é consultado no broker
 // com o prazo PublishTimeout. A sequência por tópico continua após a troca
-// de broker.
+// de broker. Conteúdo acima de 1.024 bytes não é enviado: a publicação volta
+// concluída com StatusInvalidSize e sequência zero, sem consumir sequência.
 func (c *Client) Publish(topicName string, payload []byte, ttl time.Duration) (*PendingPublish, error) {
 	if ttl < 0 {
 		return nil, fmt.Errorf("%w: validade negativa", ErrInvalidArgument)
@@ -469,6 +481,9 @@ func (c *Client) Publish(topicName string, payload []byte, ttl time.Duration) (*
 	info, err := c.cachedTopic(topicName)
 	if err != nil {
 		return nil, err
+	}
+	if len(payload) > eventwire.MaxPayload {
+		return resolvedPending(info.Ref, StatusInvalidSize), nil
 	}
 	if ttl == 0 {
 		ttl = info.Policy.MaxTTL
