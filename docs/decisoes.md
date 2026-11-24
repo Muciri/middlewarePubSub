@@ -597,3 +597,55 @@ interromper o cenário, e os registros são sempre guardados.
 Justificativa: os ensaios se repetem a cada mudança, e uma divergência
 precisa dos registros para ser analisada.
 Descartada: conferir os registros à mão.
+
+## Aplicação do leilão
+
+**D76. Aplicação com três papéis em processos separados (`cmd/leilao`).**
+Leiloeiro, participante e espectador, como na seção 2. Cada processo tem a
+própria identidade, a própria sessão e o próprio plano de dados UDP.
+Justificativa: cotas por identidade, troca de broker e encaminhamento entre
+brokers só aparecem com clientes independentes, em brokers diferentes.
+Descartada: um processo único com todos os papéis.
+
+**D77. Mensagens em JSON com o publicador e o horário de envio.**
+Todo evento leva `p` (identidade) e `t` (nanossegundos Unix), além dos
+campos do tipo.
+Justificativa: o espectador nomeia o fluxo e mede a latência sem conhecer o
+tipo da mensagem, e o conteúdo fica legível nos registros. As mensagens têm
+menos de 200 bytes, bem abaixo do limite de 1.024.
+Descartada: formato binário próprio, cuja economia não pesa nesse tamanho.
+
+**D78. Placar publicado em intervalo fixo (100 ms), e não a cada lance.**
+Justificativa: no tópico de estado, cada publicação substitui a anterior.
+A publicação periódica atualiza quem acabou de entrar ou perdeu eventos,
+mantém a taxa do leiloeiro constante e dentro da cota, e dá um fluxo
+regular para medir a lacuna.
+Descartada: publicar a cada lance novo, o que deixaria a taxa do leiloeiro
+depender dos participantes.
+
+**D79. O participante lança acima do maior valor que conhece.**
+Esse valor vem do placar ou do próprio último lance, com um incremento
+aleatório. O leiloeiro decide o maior lance.
+Justificativa: lances crescentes sem coordenação entre os participantes,
+como num leilão real com atraso de informação.
+Descartada: valores aleatórios independentes do placar.
+
+**D80. Lacuna de eventos detectada pela cadência de cada fluxo.**
+- A cadência é o maior dos últimos 20 intervalos normais.
+- Uma lacuna é um intervalo acima de 1,5 vez a cadência e com ao menos
+  20 ms a mais; ela é registrada quando o evento seguinte chega.
+- A medida do ensaio é a maior lacuna que cobre o intervalo entre as
+  marcas de injeção.
+
+Justificativa: a primeira versão media o maior intervalo depois da
+injeção e confundia variação normal com falha. Com o processo morto, a
+troca de broker cabe entre dois eventos, e o resultado correto é a
+ausência de lacuna. O máximo, e não a média, evita que as rajadas de
+reações reduzam a cadência.
+Descartada: limiar fixo em milissegundos, que dependeria da taxa de cada
+fluxo, e média móvel dos intervalos.
+
+**D81. Leilão num perfil separado do compose.**
+Justificativa: os cenários 1 a 7 continuam com o mesmo ambiente e
+resultados comparáveis; o cenário 8 e os ensaios de carga sobem o perfil.
+Descartada: subir o leilão em todos os cenários.

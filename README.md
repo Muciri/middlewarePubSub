@@ -27,6 +27,7 @@ evento só é encaminhado ao outro broker quando ele tem inscritos no tópico.
 | `client` | biblioteca cliente, com troca de broker em caso de falha |
 | `diagnostics` | contadores, cotas por identidade e dados do GetStats |
 | `cmd/broker` | executável do broker |
+| `cmd/leilao` | aplicação de exemplo: leiloeiro, participante e espectador |
 | `cmd/sonda` | sonda dos ensaios de falha (canal de controle) |
 | `cmd/ensaio` | ensaio de carga local com TCP e UDP reais |
 | `scripts` | roteiros dos ensaios de falha e medição de MTU |
@@ -38,7 +39,7 @@ Requer Go 1.23. Para regenerar o Protobuf, também `protoc` e
 `protoc-gen-go`.
 
 ```
-make build      # bin/broker e bin/sonda
+make build      # bin/broker, bin/sonda e bin/leilao
 make test       # go test -race ./...
 make proto      # regenera internal/pb
 ```
@@ -62,12 +63,23 @@ sozinho.
 No macOS, a porta 7000 costuma estar ocupada pelo Receptor AirPlay. Desative
 o receptor nos Ajustes do Sistema ou use outra porta no A (`-listen :7200`).
 
-Exemplo com a sonda:
+## Leilão
+
+A aplicação de exemplo segue o cenário da seção 2 do documento: uma sala
+com os tópicos `sala-1/lances`, `sala-1/reacoes` e `sala-1/placar`. Em
+terminais separados, com os brokers rodando:
 
 ```
-bin/sonda criar -brokers 127.0.0.1:7000 -id leiloeiro -token <token> -topico sala-1/lances
-bin/sonda observar -brokers 127.0.0.1:7000,127.0.0.1:7100 -id espectador-1 -token <token> -topicos sala-1/lances
+bin/leilao leiloeiro    -brokers 127.0.0.1:7000,127.0.0.1:7100 -id leiloeiro -token <token> -criar
+bin/leilao participante -brokers 127.0.0.1:7000,127.0.0.1:7100 -id participante-1 -token <token>
+bin/leilao espectador   -brokers 127.0.0.1:7100,127.0.0.1:7000 -id espectador-1 -token <token>
 ```
+
+O leiloeiro cria os tópicos, acompanha os lances e publica o placar a cada
+100 ms. O participante envia lances acima do placar e reações, com rajadas.
+O espectador registra, a cada 5 s, o que recebeu de cada publicador:
+eventos, perdas, latência e lacunas. `bin/leilao <papel> -h` lista as
+taxas e os demais parâmetros.
 
 ## Biblioteca cliente
 

@@ -2,10 +2,10 @@
 
 Este documento descreve como executar os ensaios de tolerância a falhas
 pedidos na seção 8 do documento do projeto, com os brokers A e B em
-ambientes isolados. Os ensaios desta etapa usam só o canal de controle
-(TCP). A lacuna de eventos (último evento antes da falha e primeiro depois)
-e o aplicativo do leilão entram depois da integração com o plano de dados
-UDP.
+ambientes isolados. Os cenários 1 a 7 usam as sondas, que só usam o canal
+de controle (TCP). O cenário 8 roda a aplicação do leilão sobre o plano de
+dados UDP e mede a lacuna de eventos: do último evento antes da falha ao
+primeiro depois.
 
 ## 1. Ambiente
 
@@ -30,6 +30,14 @@ rede "pubsub" (bridge)
   - registram cada failover com a lacuna medida;
   - consultam o canal de comandos a cada 500 ms, registrando as transições
     entre disponível e indisponível.
+- A aplicação do leilão (`cmd/leilao`) fica no perfil `leilao` do compose
+  e só sobe no cenário 8 ou com `docker compose --profile leilao up`:
+  - `leiloeiro`, no A, cria a sala, acompanha os lances e publica o
+    placar;
+  - `participante-1`, no A, e `participante-2`, no B, enviam lances e
+    reações, com rajadas periódicas;
+  - `espectador-a`, no A, e `espectador-b`, no B, recebem os três tópicos
+    e registram cada fluxo (publicador e tópico).
 - As credenciais de ensaio ficam em `config/credentials.ensaio.json`. O
   administrador é `leiloeiro`.
 
@@ -50,7 +58,12 @@ ou `docker compose --env-file <cópia> ...`.
 | `B_CPUS`, `B_MEMORIA` | 1, 256m | limites do B |
 | `LOG_FORMATO`, `LOG_NIVEL` | text, info | `json` facilita processar os registros nos ensaios de carga |
 | `TOPICOS` | os três tópicos acima | tópicos das sondas (`nome=estado` para tópico de estado) |
-| `SILENCIO` | 5s | silêncio que as sondas tratam como falha |
+| `SILENCIO` | 5s | silêncio que as sondas e o leilão tratam como falha |
+| `SALA` | sala-1 | sala do leilão, prefixo dos tópicos |
+| `PLACAR` | 100ms | intervalo entre publicações do placar |
+| `LANCES`, `REACOES` | 5, 5 | lances e reações por segundo de cada participante |
+| `RAJADA`, `RAJADA_CADA` | 10, 10s | reações enviadas de uma vez e intervalo entre rajadas |
+| `RESUMO` | 2s | intervalo entre os resumos do leilão |
 
 Reaproveitamento nos ensaios de carga:
 
@@ -58,6 +71,10 @@ Reaproveitamento nos ensaios de carga:
   7000/7001, B em 7100/7101).
 - **Geradores em contêiner** entram na rede `pubsub` e usam `a:7000` e
   `b:7000`.
+- **Carga com o leilão:** suba o perfil `leilao` com taxas maiores
+  (`LANCES`, `REACOES`, `PLACAR`) ou rode mais participantes com
+  `leilao participante` em outros contêineres; os resumos de publicações e
+  de fluxos trazem resultados de admissão, perdas, latência e descartes.
 - **Perda e atraso de pacotes** vêm de `rede perda` e `rede atraso`, dentro
   de qualquer contêiner:
   ```
@@ -71,7 +88,7 @@ Reaproveitamento nos ensaios de carga:
 ```
 scripts/ensaio.sh construir                 # ou make imagem
 scripts/ensaio.sh cenario 3 explicito       # ou make ensaio CENARIO="3 explicito"
-scripts/ensaio.sh todos                     # todos os cenários e variantes, cerca de 4 min
+scripts/ensaio.sh todos                     # todos os cenários e variantes, cerca de 6 min
 scripts/ensaio.sh descer
 ```
 
@@ -85,13 +102,13 @@ Cada cenário:
 
 | Arquivo | Conteúdo |
 |---|---|
-| `a.log`, `b.log`, `sonda-a.log`, `sonda-b.log` | registros completos de cada serviço |
+| `a.log`, `b.log`, `sonda-a.log`, `sonda-b.log` | registros completos de cada serviço; no cenário 8, também os do leilão |
 | `marcas.log` | instantes marcados pelo roteiro (injeção, recuperação) |
 | `comandos.log` | saída dos comandos avulsos do roteiro |
 | `linha-do-tempo.log` | todas as linhas, ordenadas pelo horário, com a origem entre colchetes |
 | `resumo.log` | só os eventos de falha, enlace, catálogo e inscrição |
 | `verificacoes.log` | cada resultado esperado, como `ok` ou `divergente` |
-| `medidas.log` | por sonda: injeção até a detecção, injeção até a restauração e a lacuna da biblioteca |
+| `medidas.log` | por cliente: injeção até a detecção, injeção até a restauração e a lacuna da biblioteca; por espectador e fluxo: a lacuna de eventos |
 
 Uma verificação divergente não interrompe o cenário; os registros são
 guardados mesmo assim. O diretório `ensaios/resultados/` fica fora do
@@ -121,6 +138,11 @@ Mensagens usadas na medição:
 | broker | `inscrição restaurada` | Subscribe de restauração aceito, com `enlace_ativo` |
 | broker | `sessão encerrada` | fim de uma sessão de cliente, com a causa |
 | broker | `alteração do catálogo não aplicada` | CreateTopic ou DeleteTopic recusado por falta do par |
+| leilão | `failover concluído` | o mesmo da sonda, para cada papel do leilão |
+| espectador | `fluxo` | por publicador e tópico, a cada resumo: recebidos, perdidos pela sequência, latência média, p95 e máxima, cadência e maior intervalo |
+| espectador | `lacuna de eventos` | intervalo acima de 1,5 vez a cadência do fluxo, com o último evento antes (`de`), o primeiro depois (`ate`) e os perdidos |
+| espectador | `resumo` | eventos recebidos e descartados nas filas das inscrições |
+| leiloeiro, participante | `publicações` | por tópico, a cada resumo: enviadas, resultados de admissão e recusas na hora (`erro_reconectando`, por exemplo) |
 
 A lacuna de controle tem três medidas:
 
@@ -130,6 +152,22 @@ A lacuna de controle tem três medidas:
 - **detecção até restauração:** a lacuna da biblioteca (`lacuna_ms`),
   formada pela nova conexão, pelo Hello e pelos Subscribe de restauração.
 - **injeção até restauração:** a interrupção total vista pela aplicação.
+
+A lacuna de eventos é medida no espectador, por fluxo:
+
+- A **cadência** é o maior dos últimos 20 intervalos normais entre eventos
+  do fluxo. O máximo, e não a média, evita que as rajadas de reações façam
+  um intervalo comum parecer lacuna.
+- Uma **lacuna** é um intervalo acima de 1,5 vez a cadência e com ao menos
+  20 ms a mais. Ela não entra na cadência.
+- A medida é a maior lacuna que cobre o intervalo entre as marcas
+  `injeção:` e `injeção concluída`. Sem lacuna, a interrupção ficou abaixo
+  da resolução do fluxo, que é a própria cadência.
+- A latência compara o horário de envio, que vai no conteúdo do evento,
+  com o de chegada. Em máquinas separadas, ela inclui a diferença entre os
+  relógios.
+- As perdas são os saltos na sequência do publicador. Incluem eventos
+  recusados na admissão, perdidos na rede e descartados nas filas.
 
 Ressalvas:
 
@@ -367,6 +405,43 @@ docker compose exec sonda-a sonda criar -brokers a:7000 -id leiloeiro -token ens
 - a ausência de encerramentos;
 - a geração do tópico recriado.
 
+### Cenário 8: falha do broker com o leilão em andamento
+
+**Procedimento:** `scripts/ensaio.sh cenario 8 <matar|parar|travar|isolar>`.
+O roteiro prepara o ambiente como nos outros cenários, sobe o leilão e
+espera os eventos circularem pelos dois brokers antes de injetar a falha no
+A. Manualmente:
+
+```
+docker compose --profile leilao up -d leiloeiro participante-1 participante-2 espectador-a espectador-b
+docker compose exec sonda-b sonda marcar -texto "injeção: kill -9 no A"
+docker compose kill -s KILL a
+docker compose exec sonda-b sonda marcar -texto "injeção concluída"
+docker compose start a
+```
+
+**Esperado (seção 8, "Broker do cliente falha" e "Broker par falha"):**
+- Antes da falha, cada espectador recebe o participante do próprio broker
+  e, por um único encaminhamento UDP, o do outro.
+- O espectador-a, o participante-1 e o leiloeiro passam ao B e restauram
+  as inscrições. Nenhuma inscrição é encerrada.
+- O espectador-b e o participante-2 continuam no B. O espectador-b segue
+  recebendo o participante-2 sem lacuna, porque a entrega local continua,
+  e volta a receber o participante-1 e o placar quando eles passam ao B.
+- A lacuna de eventos acompanha a detecção: com o processo morto, fica
+  abaixo da cadência dos fluxos; com o broker travado ou isolado, dura
+  cerca de 5 s nos fluxos que passavam pelo A, e os eventos desse período
+  são perdidos, sem reprodução.
+- Depois da recuperação do A, os clientes continuam no B (D60).
+
+**Registrar:**
+- por fluxo e espectador, a lacuna de eventos e os perdidos
+  (`medidas.log`);
+- as medidas de failover de cada papel;
+- os resultados de admissão dos participantes durante a troca
+  (`publicações`), incluindo as recusas com `erro_reconectando` e os
+  UNKNOWN das publicações sem resultado.
+
 ## 5. Limitações e falha de host
 
 Contêineres no mesmo computador validam o protocolo e a lógica, mas não
@@ -407,12 +482,16 @@ virtual separada, com os clientes numa terceira máquina, ou nas duas.
    ```
    Com a rede do host, o endereço UDP do par é aprendido pelo IP real do
    enlace, sem `-peer-udp-addr`.
-3. **Suba as sondas** na máquina dos clientes, com
+3. **Suba os clientes** na máquina dos clientes: as sondas, com
    `sonda observar -brokers <ip-de-A>:7000,<ip-de-B>:7000 ...` e o
-   equivalente com B primeiro. Crie os tópicos com `sonda criar`.
+   equivalente com B primeiro, e o leilão, com `leilao leiloeiro -criar`,
+   dois `leilao participante` e dois `leilao espectador`, cada par com uma
+   ordem de brokers. A porta UDP de cada cliente (`-udp`) precisa estar
+   liberada no firewall para receber eventos.
 4. **Marque e injete** na máquina dos clientes: registre a marca com
-   `sonda marcar -texto "injeção: ..." 2>> marcas.log` e injete a falha no
-   host alvo. Formas de injeção:
+   `sonda marcar -texto "injeção: ..." 2>> marcas.log`, injete a falha no
+   host alvo e registre logo depois a marca `injeção concluída`, que fecha
+   o intervalo usado na lacuna de eventos. Formas de injeção:
    - cortar a energia ou desconectar o cabo de rede;
    - `sudo ip link set <interface> down`: o host some da rede sem fechar
      conexões;
@@ -427,6 +506,52 @@ virtual separada, com os clientes numa terceira máquina, ou nas duas.
    `conexão encerrada`.
 
 ## 6. Execução de referência
+
+Execução em 19/11/2026, com Docker 29.5.2 no Docker Desktop (Linux arm64,
+máquina virtual sobre macOS) e todos os cenários com as verificações em
+`ok`. Os tempos são do mesmo computador e servem de referência para
+comparação, não de resultado de host.
+
+| Cenário | Variante | Injeção até detecção | Lacuna da biblioteca | Injeção até restauração |
+|---|---|---|---|---|
+| 1 (A falha) | matar | 69 ms | 1,4 ms | 70 ms |
+| 1 | parar | 72 ms | 2,0 ms | 74 ms |
+| 1 | travar | 4594 ms | 6,0 ms | 4600 ms |
+| 1 | isolar | 4969 ms | 3,1 ms | 4972 ms |
+| 2 (B falha) | matar | 69 ms | 1,8 ms | 71 ms |
+| 2 | parar | 83 ms | 4,9 ms | 88 ms |
+| 2 | travar | 4907 ms | 4,1 ms | 4911 ms |
+| 2 | isolar | 4930 ms | 2,9 ms | 4933 ms |
+| 4 (partição cliente) | silencioso | 5029 ms | 2,8 ms | 5032 ms |
+| 4 | explicito | 83 ms | 0,9 ms | 84 ms |
+| 6 (retorno do B) | matar | 63 ms | 1,2 ms | 64 ms |
+| 7 (reinício do A) | matar | 72 ms | 1,2 ms | 74 ms |
+
+No cenário 3, o enlace caiu 5,06 s depois do corte silencioso e entre 0,29
+e 0,35 s depois do explícito; o tempo do explícito inclui a execução do
+`docker compose exec`. Após a restauração da rede, o enlace voltou em
+0,18 s no corte silencioso e em 2,0 a 2,2 s no explícito. No explícito, as
+tentativas recusadas durante o corte fizeram o recuo crescer.
+
+No cenário 5, as inscrições foram restauradas apenas depois do retorno do
+segundo broker, e então encerradas por tópico inexistente. Os tempos desse
+cenário refletem as esperas do roteiro.
+
+No cenário 8 (execução em 24/11/2026, no mesmo ambiente), os papéis que
+passaram ao B restauraram as inscrições entre 3 e 15 ms depois da
+detecção. A lacuna de eventos por fluxo foi:
+
+| Variante | Fluxos que passavam pelo A | participante-2 no espectador-a | participante-2 no espectador-b |
+|---|---|---|---|
+| matar | sem lacuna acima da cadência (100 a 200 ms) | sem lacuna | sem lacuna |
+| travar | 5,1 a 5,2 s; 25 lances e 50 placares perdidos | 4,2 s | sem lacuna |
+| isolar | 5,1 a 5,2 s; 25 lances e 50 placares perdidos | 4,6 s | sem lacuna |
+
+Com o processo morto, o TCP é encerrado na hora, e a troca de broker cabe
+entre dois eventos consecutivos. Com o broker travado ou isolado, a lacuna
+é o silêncio de 5 s até a detecção mais a cadência do fluxo. O
+participante-2 chega ao espectador-a pelo B; a lacuna dele termina quando
+o espectador-a se reinscreve no B.
 
 ## 7. Carga local, MTU e dados para gráficos
 
@@ -461,33 +586,3 @@ publica continuamente, encerra o broker ativo e mede o intervalo entre o
 último evento anterior e o primeiro posterior à reconexão. O teste local
 não representa perda de host/rede física nem substitui a execução em
 máquinas separadas descrita acima.
-
-Execução em 19/11/2026, com Docker 29.5.2 no Docker Desktop (Linux arm64,
-máquina virtual sobre macOS) e todos os cenários com as verificações em
-`ok`. Os tempos são do mesmo computador e servem de referência para
-comparação, não de resultado de host.
-
-| Cenário | Variante | Injeção até detecção | Lacuna da biblioteca | Injeção até restauração |
-|---|---|---|---|---|
-| 1 (A falha) | matar | 69 ms | 1,4 ms | 70 ms |
-| 1 | parar | 72 ms | 2,0 ms | 74 ms |
-| 1 | travar | 4594 ms | 6,0 ms | 4600 ms |
-| 1 | isolar | 4969 ms | 3,1 ms | 4972 ms |
-| 2 (B falha) | matar | 69 ms | 1,8 ms | 71 ms |
-| 2 | parar | 83 ms | 4,9 ms | 88 ms |
-| 2 | travar | 4907 ms | 4,1 ms | 4911 ms |
-| 2 | isolar | 4930 ms | 2,9 ms | 4933 ms |
-| 4 (partição cliente) | silencioso | 5029 ms | 2,8 ms | 5032 ms |
-| 4 | explicito | 83 ms | 0,9 ms | 84 ms |
-| 6 (retorno do B) | matar | 63 ms | 1,2 ms | 64 ms |
-| 7 (reinício do A) | matar | 72 ms | 1,2 ms | 74 ms |
-
-No cenário 3, o enlace caiu 5,06 s depois do corte silencioso e entre 0,29
-e 0,35 s depois do explícito; o tempo do explícito inclui a execução do
-`docker compose exec`. Após a restauração da rede, o enlace voltou em
-0,18 s no corte silencioso e em 2,0 a 2,2 s no explícito. No explícito, as
-tentativas recusadas durante o corte fizeram o recuo crescer.
-
-No cenário 5, as inscrições foram restauradas apenas depois do retorno do
-segundo broker, e então encerradas por tópico inexistente. Os tempos desse
-cenário refletem as esperas do roteiro.
