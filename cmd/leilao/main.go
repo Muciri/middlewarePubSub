@@ -62,6 +62,7 @@ func main() {
 		fs.Int64Var(&cfg.incremento, "incremento", 10, "incremento mínimo sobre o maior lance")
 		run = func(ctx context.Context, a *app) error { return participante(ctx, a, cfg) }
 	case "espectador":
+		fs.DurationVar(&com.processamento, "processamento", 0, "atraso artificial por evento, para ensaio de consumidor lento")
 		run = func(ctx context.Context, a *app) error { return espectar(ctx, a) }
 	default:
 		usage()
@@ -101,7 +102,7 @@ func main() {
 	}
 	defer c.Close()
 
-	a := &app{log: log, c: c, id: com.identity, sala: com.sala, resumo: com.resumo}
+	a := &app{log: log, c: c, id: com.identity, sala: com.sala, resumo: com.resumo, processamento: com.processamento}
 	log.Info("leilão iniciado", "papel", papel, "sala", com.sala)
 	if err := run(ctx, a); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		log.Error("papel encerrado com erro", "papel", papel, "erro", err)
@@ -112,19 +113,20 @@ func main() {
 
 // app reúne o que os três papéis compartilham.
 type app struct {
-	log    *slog.Logger
-	c      *client.Client
-	id     string
-	sala   string
-	resumo time.Duration
+	log           *slog.Logger
+	c             *client.Client
+	id            string
+	sala          string
+	resumo        time.Duration
+	processamento time.Duration
 }
 
 func (a *app) topico(nome string) string { return a.sala + "/" + nome }
 
 type comuns struct {
-	brokers, identity, token, sala, udp string
-	logFormat, logLevel                 string
-	silence, resumo, duracao            time.Duration
+	brokers, identity, token, sala, udp     string
+	logFormat, logLevel                     string
+	silence, resumo, duracao, processamento time.Duration
 }
 
 func flagsComuns(fs *flag.FlagSet) *comuns {
@@ -137,6 +139,7 @@ func flagsComuns(fs *flag.FlagSet) *comuns {
 	fs.DurationVar(&c.silence, "silencio", client.DefaultHeartbeatTimeout, "silêncio do broker que caracteriza falha")
 	fs.DurationVar(&c.resumo, "resumo", 5*time.Second, "intervalo entre os registros de resumo")
 	fs.DurationVar(&c.duracao, "duracao", 0, "encerra depois desse tempo; zero roda até receber um sinal")
+	fs.DurationVar(&c.processamento, "processamento", 0, "atraso artificial por evento para ensaio de consumidor lento")
 	fs.StringVar(&c.logFormat, "log-format", "text", "formato do log: text ou json")
 	fs.StringVar(&c.logLevel, "log-level", "info", "nível do log: debug, info, warn ou error")
 	return c
@@ -216,7 +219,7 @@ func manterInscricao(ctx context.Context, a *app, nome string, aoInscrever func(
 		if aoInscrever != nil {
 			aoInscrever(sub)
 		}
-		if !drenar(ctx, sub, tratar) {
+		if !drenar(ctx, sub, tratar, a.processamento) {
 			return
 		}
 		a.log.Warn("inscrição encerrada", "topico", nome, "erro", sub.Err())
@@ -225,7 +228,7 @@ func manterInscricao(ctx context.Context, a *app, nome string, aoInscrever func(
 
 // drenar entrega os eventos até a inscrição terminar (true) ou ctx acabar
 // (false).
-func drenar(ctx context.Context, sub *client.Subscription, tratar func(client.Event)) bool {
+func drenar(ctx context.Context, sub *client.Subscription, tratar func(client.Event), processamento time.Duration) bool {
 	for {
 		select {
 		case <-ctx.Done():
@@ -233,6 +236,9 @@ func drenar(ctx context.Context, sub *client.Subscription, tratar func(client.Ev
 		case ev, ok := <-sub.Events():
 			if !ok {
 				return true
+			}
+			if processamento > 0 && !pausa(ctx, processamento) {
+				return false
 			}
 			tratar(ev)
 		}

@@ -151,6 +151,15 @@ func (b *Broker) Serve(ln net.Listener) error {
 		ln.Close()
 		return fmt.Errorf("broker: bind UDP %d: %w", b.cfg.EventPort, err)
 	}
+	// Buffers menores limitam a memória do kernel reservada aos datagramas.
+	if err := udp.SetReadBuffer(256 << 10); err != nil {
+		udp.Close()
+		return fmt.Errorf("broker: buffer de leitura UDP: %w", err)
+	}
+	if err := udp.SetWriteBuffer(256 << 10); err != nil {
+		udp.Close()
+		return fmt.Errorf("broker: buffer de escrita UDP: %w", err)
+	}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()

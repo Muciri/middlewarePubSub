@@ -9,9 +9,11 @@ import (
 
 const (
 	PublisherQueueLimit = 1024
-	GlobalQueueLimit    = 65536
-	DispatchTurnBytes   = 4096
-	MaxQueuedBytes      = 64 << 20
+	// GlobalQueueLimit é o teto global de eventos em espera; o valor padrão
+	// suporta até duas vezes a carga de referência de 2.000 eventos.
+	GlobalQueueLimit  = 4000
+	DispatchTurnBytes = 4096
+	MaxQueuedBytes    = 64 << 20
 )
 
 type BoundedQueue struct {

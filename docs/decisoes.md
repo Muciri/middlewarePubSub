@@ -694,3 +694,39 @@ a falha simultânea dos dois brokers; com um deles de pé, a seção 8 é
 seguida como escrita.
 Descartada: permitir que o broker que volta sozinho crie tópicos e
 responda pelo catálogo sem o par.
+
+## Distribuição de eventos
+
+**D85. Filas por inscrição ficam na biblioteca cliente; o broker envia os
+datagramas diretamente.**
+O broker não mantém uma fila individual para cada inscrição. Depois da
+admissão, ele agenda o evento nas filas globais de distribuição e envia o
+datagrama aos endereços UDP das inscrições ativas. Ao receber, a biblioteca
+cliente coloca o evento na fila daquela inscrição: 256 eventos para tópico
+efêmero, descartando o mais antigo quando cheia, e um evento para tópico de
+estado, substituindo a versão pendente. `Subscription.Dropped()` expõe os
+descartes observados localmente.
+
+Justificativa: o isolamento do consumidor lento ocorre no cliente, onde a
+capacidade e a política são por inscrição; um consumidor não bloqueia o
+envio do broker nem ocupa uma fila de saída dedicada nele. O custo é que
+descartes por fila cheia são locais e não fazem o broker repetir o evento.
+Esta é uma divergência deliberada da seção 4.2, que descreve filas por
+inscrição no broker. O comportamento observável de capacidade e descarte é
+preservado, mas a localização da fila difere.
+Descartada: manter no broker uma fila de saída por inscrição, que duplicaria
+bufferização e associaria o progresso do consumidor ao processo central.
+
+**D86. O encaminhamento entre brokers compartilha o socket e a porta UDP
+de eventos (7001).**
+O broker envia datagramas encaminhados pela mesma conexão UDP usada para
+receber publicações e entregar eventos aos clientes. O destino do par é
+aprendido no handshake do enlace (D56); ao receber um datagrama marcado
+como encaminhado, o broker exige enlace ativo e confere que o endereço de
+origem corresponde ao endereço UDP anunciado pelo par.
+
+Justificativa: mantém uma única porta UDP por broker para o plano de dados,
+simplificando publicação, encaminhamento e regras de firewall. A origem
+validada pelo enlace impede que um cliente comum se passe pelo par. O
+encaminhamento continua limitado a um salto, pela marca de encaminhamento.
+Descartada: reservar uma segunda porta UDP só para o tráfego entre brokers.
