@@ -62,7 +62,6 @@ func main() {
 		fs.Int64Var(&cfg.incremento, "incremento", 10, "incremento mínimo sobre o maior lance")
 		run = func(ctx context.Context, a *app) error { return participante(ctx, a, cfg) }
 	case "espectador":
-		fs.DurationVar(&com.processamento, "processamento", 0, "atraso artificial por evento, para ensaio de consumidor lento")
 		run = func(ctx context.Context, a *app) error { return espectar(ctx, a) }
 	default:
 		usage()

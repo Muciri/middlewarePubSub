@@ -5,12 +5,34 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/franciscovmn/middlewarePubSub/broker"
 	"github.com/franciscovmn/middlewarePubSub/client"
 )
+
+// TestPapeisIniciamOpcoes executa main com -h em cada papel, num processo
+// separado, para pegar opções registradas em duplicidade, que só falham na
+// partida.
+func TestPapeisIniciamOpcoes(t *testing.T) {
+	if papel := os.Getenv("LEILAO_TESTE_PAPEL"); papel != "" {
+		os.Args = []string{"leilao", papel, "-h"}
+		main()
+		return
+	}
+	for _, papel := range []string{"leiloeiro", "participante", "espectador"} {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestPapeisIniciamOpcoes$")
+		cmd.Env = append(os.Environ(), "LEILAO_TESTE_PAPEL="+papel)
+		out, err := cmd.CombinedOutput()
+		if err != nil || strings.Contains(string(out), "panic") {
+			t.Errorf("%s -h falhou: %v\n%s", papel, err, out)
+		}
+	}
+}
 
 func TestFluxoContaPerdasEMaiorIntervalo(t *testing.T) {
 	base := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
