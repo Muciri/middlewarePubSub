@@ -43,6 +43,7 @@ services:
       - -id=A
       - -listen=:7000
       - -udp-port=7001
+      - -memoria-max-bytes=${MEMORIA_MAX_BYTES:-201326592}
       - -credentials=/etc/pubsub/credentials.json
       - -peer-id=B
       - -peer-admin
@@ -64,6 +65,7 @@ services:
       - -id=B
       - -listen=:7000
       - -udp-port=7001
+      - -memoria-max-bytes=${MEMORIA_MAX_BYTES:-201326592}
       - -credentials=/etc/pubsub/credentials.json
       - -peer-id=A
       - -peer-listen=:7002

@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/franciscovmn/middlewarePubSub/broker"
@@ -40,8 +41,14 @@ func main() {
 
 		logFormat = flag.String("log-format", "text", "formato do log: text ou json")
 		logLevel  = flag.String("log-level", "info", "nível do log: debug, info, warn ou error")
+		memLimit  = flag.Int64("memoria-max-bytes", 256<<20, "teto de memória gerenciada pelo runtime Go")
 	)
 	flag.Parse()
+	if *memLimit < 1 {
+		fmt.Fprintln(os.Stderr, "memoria-max-bytes deve ser positivo")
+		os.Exit(2)
+	}
+	debug.SetMemoryLimit(*memLimit)
 
 	log, err := logging.New(os.Stderr, *logFormat, *logLevel)
 	if err != nil {
