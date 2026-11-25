@@ -40,6 +40,12 @@ func (b *Broker) serveUDP(conn *net.UDPConn) {
 
 func (b *Broker) dispatchUDP(conn *net.UDPConn) {
 	defer b.wg.Done()
+	interval := time.Second / time.Duration(b.cfg.DispatchRate)
+	if interval < time.Nanosecond {
+		interval = time.Nanosecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-b.stopDispatch:
@@ -48,6 +54,11 @@ func (b *Broker) dispatchUDP(conn *net.UDPConn) {
 		case <-time.After(250 * time.Millisecond):
 		}
 		for {
+			select {
+			case <-b.stopDispatch:
+				return
+			case <-ticker.C:
+			}
 			_, e, ok := b.scheduler.Next(eventwire.DispatchTurnBytes)
 			if !ok {
 				break
@@ -187,7 +198,10 @@ func (b *Broker) handleDatagram(conn *net.UDPConn, from netip.AddrPort, packet [
 		remote := b.Contracts().Interest.RemoteInterest(ref)
 		fresh := remote.Fresh(time.Now(), contract.InterestMaxAge)
 		link := b.Contracts().Link.Link()
-		if len(subs) == 0 && fresh && !remote.HasSubscribers {
+		if len(subs) == 0 && !link.Alive {
+			result.Status = contract.AdmissionUnavailable
+			b.count("interest_unavailable")
+		} else if len(subs) == 0 && fresh && !remote.HasSubscribers {
 			result.Status = contract.AdmissionNoSubscribers
 			b.count("no_subscribers")
 		} else if len(subs) == 0 && (!fresh || !remote.HasSubscribers || !link.Alive || !link.PeerUDP.IsValid()) {

@@ -22,6 +22,7 @@ const (
 	DefaultHeartbeatTimeout  = 5 * time.Second
 	DefaultWriteTimeout      = time.Second
 	DefaultResultQueue       = 4096
+	DefaultDispatchRate      = 60
 )
 
 type Credential struct {
@@ -48,6 +49,8 @@ type Config struct {
 	// ResultQueue limita as mensagens enviadas por iniciativa do broker
 	// aguardando escrita em cada conexão.
 	ResultQueue int
+	// DispatchRate limita eventos retirados da fila global por segundo.
+	DispatchRate int
 
 	Stats        contract.StatsSource
 	Limiter      contract.CommandLimiter
@@ -73,7 +76,7 @@ func (c Config) withDefaults() (Config, error) {
 	if len(c.Credentials) == 0 {
 		return c, fmt.Errorf("%w: nenhuma credencial", ErrInvalidConfig)
 	}
-	if c.HeartbeatInterval < 0 || c.HeartbeatTimeout < 0 || c.WriteTimeout < 0 || c.ResultQueue < 0 {
+	if c.HeartbeatInterval < 0 || c.HeartbeatTimeout < 0 || c.WriteTimeout < 0 || c.ResultQueue < 0 || c.DispatchRate < 0 {
 		return c, fmt.Errorf("%w: valores negativos", ErrInvalidConfig)
 	}
 	if c.EventPort == 0 {
@@ -93,6 +96,9 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	if c.ResultQueue == 0 {
 		c.ResultQueue = DefaultResultQueue
+	}
+	if c.DispatchRate == 0 {
+		c.DispatchRate = DefaultDispatchRate
 	}
 	if c.Stats == nil {
 		c.Stats = diagnostics.New()
