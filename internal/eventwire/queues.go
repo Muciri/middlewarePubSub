@@ -9,11 +9,9 @@ import (
 
 const (
 	PublisherQueueLimit = 1024
-	// GlobalQueueLimit é o teto global de eventos em espera; o valor padrão
-	// suporta até duas vezes a carga de referência de 2.000 eventos.
-	GlobalQueueLimit  = 4000
-	DispatchTurnBytes = 4096
-	MaxQueuedBytes    = 64 << 20
+	GlobalQueueLimit    = 65536
+	DispatchTurnBytes   = 4096
+	MaxQueuedBytes      = 64 << 20
 )
 
 type BoundedQueue struct {
@@ -122,8 +120,6 @@ func (s *FairScheduler) Next(budget int) (string, QueuedEvent, bool) {
 			if idx < s.cursor && s.cursor > 0 {
 				s.cursor--
 			}
-		}
-		if len(e.Payload)+HeaderSize > budget { /* atomic UDP event may exceed turn budget */
 		}
 		return id, e, true
 	}

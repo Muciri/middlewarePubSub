@@ -39,9 +39,10 @@ func main() {
 		peerToken  = flag.String("peer-token", "", "segredo compartilhado entre os brokers")
 		peerUDP    = flag.String("peer-udp-addr", "", "sobrescreve o endereço UDP de eventos do par, informado por ele no handshake")
 
-		logFormat = flag.String("log-format", "text", "formato do log: text ou json")
-		logLevel  = flag.String("log-level", "info", "nível do log: debug, info, warn ou error")
-		memLimit  = flag.Int64("memoria-max-bytes", 256<<20, "teto de memória gerenciada pelo runtime Go")
+		logFormat    = flag.String("log-format", "text", "formato do log: text ou json")
+		logLevel     = flag.String("log-level", "info", "nível do log: debug, info, warn ou error")
+		memLimit     = flag.Int64("memoria-max-bytes", 256<<20, "teto de memória gerenciada pelo runtime Go")
+		dispatchRate = flag.Int("distribuicao-por-segundo", broker.DefaultDispatchRate, "limite global de eventos retirados para distribuição por segundo")
 	)
 	flag.Parse()
 	if *memLimit < 1 {
@@ -71,6 +72,7 @@ func main() {
 		EventPort:          uint16(*eventPort),
 		Credentials:        creds,
 		RestrictTopicAdmin: *restricted,
+		DispatchRate:       *dispatchRate,
 		Logger:             log,
 	}
 	if *peerID != "" {
