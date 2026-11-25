@@ -144,6 +144,7 @@ services:
       - -reacoes=${REACOES:-5}
       - -rajada=${RAJADA:-10}
       - -rajada-cada=${RAJADA_CADA:-10s}
+      - -duracao=${DURACAO:-60s}
       - -resumo=${RESUMO:-2s}
       - -silencio=${SILENCIO:-5s}
       - -log-format=${LOG_FORMATO:-text}
@@ -159,6 +160,39 @@ services:
       LEILAO_SALA: ${SALA:-sala-1}
     command: *participante
 
+  # Participantes adicionais permitem medir justiça entre publicadores sem
+  # reutilizar identidade/sessão. Alterne a preferência A/B nos ensaios.
+  participante-3:
+    <<: *leilao
+    hostname: participante-3
+    environment: {LEILAO_BROKERS: "a:7000,b:7000", LEILAO_ID: participante-3, LEILAO_TOKEN: ensaio-participante-3, LEILAO_SALA: ${SALA:-sala-1}}
+    command: *participante
+  participante-4:
+    <<: *leilao
+    hostname: participante-4
+    environment: {LEILAO_BROKERS: "b:7000,a:7000", LEILAO_ID: participante-4, LEILAO_TOKEN: ensaio-participante-4, LEILAO_SALA: ${SALA:-sala-1}}
+    command: *participante
+  participante-5:
+    <<: *leilao
+    hostname: participante-5
+    environment: {LEILAO_BROKERS: "a:7000,b:7000", LEILAO_ID: participante-5, LEILAO_TOKEN: ensaio-participante-5, LEILAO_SALA: ${SALA:-sala-1}}
+    command: *participante
+  participante-6:
+    <<: *leilao
+    hostname: participante-6
+    environment: {LEILAO_BROKERS: "b:7000,a:7000", LEILAO_ID: participante-6, LEILAO_TOKEN: ensaio-participante-6, LEILAO_SALA: ${SALA:-sala-1}}
+    command: *participante
+  participante-7:
+    <<: *leilao
+    hostname: participante-7
+    environment: {LEILAO_BROKERS: "a:7000,b:7000", LEILAO_ID: participante-7, LEILAO_TOKEN: ensaio-participante-7, LEILAO_SALA: ${SALA:-sala-1}}
+    command: *participante
+  participante-8:
+    <<: *leilao
+    hostname: participante-8
+    environment: {LEILAO_BROKERS: "b:7000,a:7000", LEILAO_ID: participante-8, LEILAO_TOKEN: ensaio-participante-8, LEILAO_SALA: ${SALA:-sala-1}}
+    command: *participante
+
   espectador-a:
     <<: *leilao
     hostname: espectador-a
@@ -171,6 +205,7 @@ services:
       - leilao
       - espectador
       - -resumo=${RESUMO:-2s}
+      - -processamento=${ATRASO_CONSUMIDOR:-0}
       - -silencio=${SILENCIO:-5s}
       - -log-format=${LOG_FORMATO:-text}
       - -log-level=${LOG_NIVEL:-info}

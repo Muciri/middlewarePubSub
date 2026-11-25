@@ -593,3 +593,34 @@ publica continuamente, encerra o broker ativo e mede o intervalo entre o
 último evento anterior e o primeiro posterior à reconexão. O teste local
 não representa perda de host/rede física nem substitui a execução em
 máquinas separadas descrita acima.
+
+### Carga com encaminhamento, justiça e consumidor lento
+
+Para exercitar os dois brokers, use o perfil do leilão com participantes em
+ambos. `participante-3` a `participante-8` têm identidades próprias e
+alternam a preferência A/B. Exemplo com quatro publicadores durante 60 s:
+
+```sh
+scripts/ensaio.sh preparar
+LOG_FORMATO=text DURACAO=60s LANCES=20 REACOES=4 RAJADA=0 \
+  docker compose --env-file scripts/ensaio.env --profile leilao up -d \
+  leiloeiro espectador-a espectador-b participante-1 participante-2 participante-3 participante-4
+sleep 65
+scripts/ensaio.sh coletar carga-encaminhada
+python scripts/graficos-carga.py ensaios/resultados/<diretorio-da-coleta>
+```
+
+O gerador produz `justica.csv`/`.svg`, `lacuna-failover.svg` e
+`descartes.svg`. Justiça usa os eventos de lance vistos por um espectador e
+calcula o índice de Jain (1 indica distribuição igual). Para avaliar o
+efeito do segundo broker, compare com uma coleta equivalente após parar B e
+usar só clientes que preferem A; mantenha taxa, duração e quantidade de
+publicadores iguais. A lacuna de failover vem das linhas `lacuna de eventos`
+coletadas pelo cenário UDP 8 (`scripts/ensaio.sh cenario 8 matar`, `travar`
+ou `isolar`).
+
+Para consumidor lento, repita a coleta com `ATRASO_CONSUMIDOR=50ms` (ou outro
+atraso) e compare com `ATRASO_CONSUMIDOR=0`. O atraso é aplicado ao
+processamento de cada evento no espectador e os resumos registram
+`descartados_fila`, permitindo observar o descarte na fila limitada da
+biblioteca.
